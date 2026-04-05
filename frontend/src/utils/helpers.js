@@ -16,39 +16,40 @@ export const truncate = (str, length = 50) => {
 export const getTheme = (theme) => {
   if (theme === 'light') {
     return {
-      bg:      '#f5f5f5',
-      bg2:     '#ffffff',
-      bg3:     '#ebebeb',
-      border:  '#d0d0d0',
-      accent:  '#e8a020',
-      accentText: '#b37800',
-      accentBg:   '#e8a020',
+      bg:         '#f0f2f5',
+      bg2:        '#ffffff',
+      bg3:        '#e8eaf0',
+      border:     '#c8ccd8',
+      accent:     '#d4860a',
+      accentText: '#b36d00',
+      accentBg:   '#d4860a',
       accentFg:   '#ffffff',
-      text:    '#1a1a1a',
-      text2:   '#4a4a4a',
-      text3:   '#888888',
-      green:   '#1a7f37',
-      red:     '#cf222e',
-      blue:    '#0969da',
+      text:       '#0f1117',
+      text2:      '#2d3142',
+      text3:      '#6b7280',
+      green:      '#16a34a',
+      red:        '#dc2626',
+      blue:       '#2563eb',
     }
   }
   return {
-    bg:      '#0d0f12',
-    bg2:     '#0f1217',
-    bg3:     '#13161b',
-    border:  '#2a2f3d',
-    accent:  '#e8a020',
+    bg:         '#0d0f12',
+    bg2:        '#0f1217',
+    bg3:        '#13161b',
+    border:     '#2a2f3d',
+    accent:     '#e8a020',
     accentText: '#e8a020',
     accentBg:   '#e8a020',
     accentFg:   '#0d0f12',
-    text:    '#e8e4d9',
-    text2:   '#8b8fa8',
-    text3:   '#555970',
-    green:   '#2ecc71',
-    red:     '#e74c3c',
-    blue:    '#4a9eff',
+    text:       '#e8e4d9',
+    text2:      '#8b8fa8',
+    text3:      '#555970',
+    green:      '#2ecc71',
+    red:        '#e74c3c',
+    blue:       '#4a9eff',
   }
 }
+ 
 
 export const getLabelColors = (theme, label) => {
   const dark = {

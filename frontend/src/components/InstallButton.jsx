@@ -1,182 +1,280 @@
-import { useState, useContext, useRef, useEffect } from 'react'
+import { useContext, useState, useEffect, useRef } from 'react'
 import { ThemeContext } from '../App'
 import { getTheme } from '../utils/helpers'
-import { sendMessage } from '../api/client'
 
-function SendIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-      <line x1="22" y1="2" x2="11" y2="13"/>
-      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
-    </svg>
-  )
-}
+const PROVIDERS = [
+  {
+    id: 'claude',
+    label: 'Claude Sonnet',
+    sub: 'Anthropic · Best for code',
+    placeholder: 'sk-ant-...',
+    recommended: true,
+  },
+  {
+    id: 'gpt4o',
+    label: 'GPT-4o',
+    sub: 'OpenAI · Most popular',
+    placeholder: 'sk-...',
+    recommended: false,
+  },
+  {
+    id: 'gemini',
+    label: 'Gemini 1.5 Pro',
+    sub: 'Google · Free tier available',
+    placeholder: 'AIza...',
+    recommended: false,
+  },
+]
 
-export default function ChatPanel({ selectedRepo, selectedIssue }) {
+/**
+ * InstallButton
+ * A self-contained API key manager button.
+ * Renders a small pill in the status bar; clicking opens a floating panel above it.
+ *
+ * Props:
+ *   onProviderChange(providerId, apiKey) — called whenever a key is saved
+ */
+export default function InstallButton({ onProviderChange }) {
   const { theme } = useContext(ThemeContext)
   const t = getTheme(theme)
-  const [messages, setMessages] = useState([{
-    role: 'ai',
-    content: 'Hello! I have indexed this repository and I am ready to help you understand the codebase. Ask me anything — how modules connect, what a file does, or how to fix an open issue.',
-    sources: [],
-  }])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const bottomRef = useRef(null)
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+  const [open, setOpen] = useState(false)
+  const [apiKeys, setApiKeys] = useState({ claude: '', gpt4o: '', gemini: '' })
+  const [savedKeys, setSavedKeys] = useState({ claude: false, gpt4o: false, gemini: false })
+  const [connected, setConnected] = useState({ claude: false, gpt4o: false, gemini: false })
+  const [activeProvider, setActiveProvider] = useState('claude')
+  const ref = useRef(null)
 
+  // Load persisted keys
   useEffect(() => {
-    if (selectedIssue) {
-      setMessages(prev => [...prev, {
-        role: 'ai',
-        content: `You selected Issue #${selectedIssue.number}: "${selectedIssue.title}". I will focus my answers on this issue. Ask me what code is responsible, how to fix it, or where to start contributing.`,
-        sources: [],
-      }])
+    const provider = localStorage.getItem('prguard_provider')
+    const key = localStorage.getItem('prguard_apikey')
+    if (provider && key) {
+      setActiveProvider(provider)
+      setApiKeys(prev => ({ ...prev, [provider]: key }))
+      setConnected(prev => ({ ...prev, [provider]: true }))
     }
-  }, [selectedIssue])
+  }, [])
 
-  const handleSend = async () => {
-    if (!input.trim() || loading) return
-    setMessages(prev => [...prev, { role: 'user', content: input }])
-    setInput('')
-    setLoading(true)
-    const response = await sendMessage(input, selectedRepo, selectedIssue?.id)
-    setMessages(prev => [...prev, {
-      role: 'ai',
-      content: response.answer,
-      sources: response.sources || [],
-    }])
-    setLoading(false)
+  // Click outside closes panel
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const handleSave = (providerId) => {
+    const key = apiKeys[providerId]
+    if (!key) return
+    localStorage.setItem('prguard_provider', providerId)
+    localStorage.setItem('prguard_apikey', key)
+    setActiveProvider(providerId)
+    setConnected(prev => ({ ...prev, [providerId]: true }))
+    setSavedKeys(prev => ({ ...prev, [providerId]: true }))
+    onProviderChange?.(providerId, key)
+    setTimeout(() => setSavedKeys(prev => ({ ...prev, [providerId]: false })), 1500)
   }
 
-  const suggestions = [
-    'How does the auth module work?',
-    'Which files do I need to change?',
-    'Explain the folder structure',
-    'How do I run the tests?',
-  ]
+  const connectedCount = Object.values(connected).filter(Boolean).length
+  const anyConnected = connectedCount > 0
+
+  // ── colours that work for both bar placement ──
+  const dark = theme === 'dark'
+  const panelBg     = dark ? '#0f1318' : '#ffffff'
+  const panelBorder = dark ? '#1e2a3a' : '#e2e2e2'
+  const rowBorder   = dark ? '#161e28' : '#f2f2f2'
+  const inputBg     = dark ? '#0a0e13' : '#f5f5f5'
+  const mutedText   = dark ? '#4a5568' : '#888'
+  const hoverBg     = dark ? '#1a2030' : '#e8e8e8'
 
   return (
-    <div className="flex flex-col h-full" style={{ background: t.bg }}>
-      <div className="px-4 py-2 flex items-center justify-between flex-shrink-0"
-        style={{ background: t.bg2, borderBottom: `1px solid ${t.border}` }}>
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-          <span className="text-xs" style={{ color: t.text2 }}>
-            {selectedRepo ? `Chatting about ${selectedRepo}` : 'Select a repository to start'}
-          </span>
-        </div>
-        {selectedIssue && (
-          <span className="text-xs mono px-2 py-0.5 rounded"
-            style={{ color: t.accentText, background: t.bg3, border: `1px solid ${t.border}` }}>
-            Issue #{selectedIssue.number}
-          </span>
-        )}
-      </div>
+    <div className="relative flex items-center" ref={ref}>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((msg, i) => (
-          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] flex flex-col gap-1 ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-              <span className="text-[9px] uppercase tracking-widest"
-                style={{ color: msg.role === 'user' ? t.blue : t.accentText }}>
-                {msg.role === 'user' ? 'You' : 'PRGuard AI'}
+      {/* ── PILL BUTTON ── */}
+      <button
+        onClick={() => setOpen(prev => !prev)}
+        className="flex items-center gap-1.5 transition-all rounded"
+        style={{
+          background: 'transparent',
+          border: 'none',
+          cursor: 'pointer',
+          padding: '2px 6px',
+          color: anyConnected ? '#22c55e' : '#f59e0b',
+        }}
+        onMouseEnter={e => e.currentTarget.style.background = hoverBg}
+        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        title="Manage API Keys"
+      >
+        {/* Key icon SVG */}
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="7.5" cy="15.5" r="5.5" />
+          <path d="M21 2l-9.6 9.6" />
+          <path d="M15.5 7.5l3 3L22 7l-3-3" />
+        </svg>
+        <span style={{ fontSize: 10, fontWeight: 500 }}>
+          {anyConnected ? `${connectedCount} key${connectedCount > 1 ? 's' : ''} set` : 'Set API key'}
+        </span>
+        <span style={{ fontSize: 8, opacity: 0.5 }}>
+          {open ? '▴' : '▾'}
+        </span>
+      </button>
+
+      {/* ── FLOATING PANEL (opens upward) ── */}
+      {open && (
+        <div
+          className="absolute bottom-full right-0 mb-2 rounded-lg overflow-hidden"
+          style={{
+            width: 280,
+            background: panelBg,
+            border: `1px solid ${panelBorder}`,
+            boxShadow: dark
+              ? '0 -8px 32px rgba(0,0,0,0.7)'
+              : '0 -4px 24px rgba(0,0,0,0.13)',
+            zIndex: 9999,
+          }}
+        >
+          {/* Header */}
+          <div
+            className="px-3 py-2 flex items-center justify-between"
+            style={{ borderBottom: `1px solid ${rowBorder}` }}
+          >
+            <div className="flex items-center gap-2">
+              <span style={{
+                fontSize: 10, fontWeight: 600, letterSpacing: '0.05em',
+                textTransform: 'uppercase', color: t.text,
+              }}>
+                LLM Provider
               </span>
-              <div className="rounded-lg px-3 py-2.5 text-xs leading-relaxed"
-                style={{
-                  background: msg.role === 'user'
-                    ? (theme === 'dark' ? '#1a2030' : '#e8f0fe')
-                    : t.bg3,
-                  border: `1px solid ${msg.role === 'user'
-                    ? (theme === 'dark' ? '#2a3a5a' : '#c0d0f0')
-                    : t.border}`,
-                  color: t.text,
-                }}>
-                {msg.content}
-              </div>
-
-              {msg.sources?.length > 0 && (
-                <div className="w-full rounded-lg p-2.5 space-y-1.5"
-                  style={{ background: t.bg2, border: `1px solid ${t.border}` }}>
-                  <p className="text-[9px] uppercase tracking-widest mb-1.5" style={{ color: t.text3 }}>
-                    RAG Sources
-                  </p>
-                  {msg.sources.map((src, j) => (
-                    <div key={j} className="flex items-center justify-between">
-                      <span className="text-[10px] mono" style={{ color: t.accentText }}>{src.file}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px]" style={{ color: t.text3 }}>lines {src.lines}</span>
-                        <span className="text-[10px]" style={{ color: t.green }}>
-                          {Math.round(src.relevance * 100)}%
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <span style={{
+                fontSize: 9, padding: '1px 5px', borderRadius: 3,
+                background: anyConnected ? '#22c55e22' : '#f59e0b22',
+                color: anyConnected ? '#22c55e' : '#f59e0b',
+                border: `1px solid ${anyConnected ? '#22c55e44' : '#f59e0b44'}`,
+              }}>
+                {connectedCount}/{PROVIDERS.length} connected
+              </span>
             </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div className="flex justify-start">
-            <div className="rounded-lg px-4 py-3 flex items-center gap-2"
-              style={{ background: t.bg3, border: `1px solid ${t.border}` }}>
-              <div className="flex gap-1">
-                {[0,1,2].map(i => (
-                  <div key={i} className="w-1.5 h-1.5 rounded-full animate-bounce"
-                    style={{ background: t.accent, animationDelay: `${i * 0.15}s` }} />
-                ))}
-              </div>
-              <span className="text-xs" style={{ color: t.text3 }}>Searching codebase...</span>
-            </div>
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {messages.length === 1 && (
-        <div className="px-4 pb-3 grid grid-cols-2 gap-2">
-          {suggestions.map((s, i) => (
-            <button key={i} onClick={() => setInput(s)}
-              className="text-left text-xs px-3 py-2 rounded transition-all"
-              style={{ background: t.bg2, border: `1px solid ${t.border}`, color: t.text3 }}
-              onMouseEnter={e => { e.currentTarget.style.borderColor = t.accent; e.currentTarget.style.color = t.accentText }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = t.border; e.currentTarget.style.color = t.text3 }}
+            <button
+              onClick={() => setOpen(false)}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                color: mutedText, fontSize: 16, lineHeight: 1, padding: '0 2px',
+              }}
+              onMouseEnter={e => e.currentTarget.style.color = t.text}
+              onMouseLeave={e => e.currentTarget.style.color = mutedText}
             >
-              {s}
+              ×
             </button>
+          </div>
+
+          {/* Provider rows */}
+          {PROVIDERS.map((provider) => (
+            <div
+              key={provider.id}
+              className="px-3 py-2.5"
+              style={{ borderBottom: `1px solid ${rowBorder}` }}
+            >
+              {/* Provider name + badges */}
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-1.5">
+                  <span style={{
+                    width: 5, height: 5, borderRadius: '50%', flexShrink: 0,
+                    background: connected[provider.id] ? '#22c55e' : '#374151',
+                    display: 'inline-block',
+                  }} />
+                  <span style={{ fontSize: 11, fontWeight: 500, color: t.text }}>
+                    {provider.label}
+                  </span>
+                  {provider.recommended && (
+                    <span style={{
+                      fontSize: 8, padding: '0 4px', borderRadius: 3,
+                      color: t.accentText, background: t.accent + '20',
+                    }}>
+                      recommended
+                    </span>
+                  )}
+                  {provider.id === 'gemini' && (
+                    <span style={{
+                      fontSize: 8, padding: '0 4px', borderRadius: 3,
+                      color: '#22c55e', background: '#22c55e20',
+                    }}>
+                      free tier
+                    </span>
+                  )}
+                </div>
+                {connected[provider.id] && activeProvider === provider.id && (
+                  <span style={{ fontSize: 9, color: '#22c55e' }}>● active</span>
+                )}
+              </div>
+
+              {/* Sub label */}
+              <div style={{ fontSize: 9, color: mutedText, marginBottom: 6 }}>
+                {provider.sub}
+              </div>
+
+              {/* Input + Save */}
+              <div className="flex gap-1.5">
+                <input
+                  type="password"
+                  value={apiKeys[provider.id]}
+                  onChange={e => setApiKeys(prev => ({ ...prev, [provider.id]: e.target.value }))}
+                  onKeyDown={e => { if (e.key === 'Enter') handleSave(provider.id) }}
+                  placeholder={provider.placeholder}
+                  style={{
+                    flex: 1, minWidth: 0, padding: '4px 7px',
+                    fontSize: 10, fontFamily: 'monospace',
+                    background: inputBg, color: t.text, outline: 'none',
+                    border: `1px solid ${connected[provider.id] ? '#22c55e44' : panelBorder}`,
+                    borderRadius: 4,
+                    transition: 'border-color 0.15s',
+                  }}
+                  onFocus={e => e.target.style.borderColor = t.accent}
+                  onBlur={e => e.target.style.borderColor = connected[provider.id] ? '#22c55e44' : panelBorder}
+                />
+                <button
+                  onClick={() => handleSave(provider.id)}
+                  disabled={!apiKeys[provider.id]}
+                  style={{
+                    padding: '4px 9px', fontSize: 10, fontWeight: 500,
+                    borderRadius: 4, flexShrink: 0, transition: 'all 0.15s',
+                    cursor: apiKeys[provider.id] ? 'pointer' : 'not-allowed',
+                    border: `1px solid ${
+                      savedKeys[provider.id] ? '#22c55e'
+                      : apiKeys[provider.id] ? t.accent
+                      : panelBorder
+                    }`,
+                    background: savedKeys[provider.id]
+                      ? '#22c55e22'
+                      : apiKeys[provider.id] ? t.accentBg : inputBg,
+                    color: savedKeys[provider.id]
+                      ? '#22c55e'
+                      : apiKeys[provider.id] ? t.accentFg : mutedText,
+                  }}
+                >
+                  {savedKeys[provider.id]
+                    ? '✓'
+                    : connected[provider.id] ? 'Update' : 'Save'}
+                </button>
+              </div>
+            </div>
           ))}
+
+          {/* Footer */}
+          <div
+            className="px-3 py-2 flex items-center justify-between"
+            style={{ background: dark ? '#0a0d11' : '#fafafa' }}
+          >
+            <span style={{ fontSize: 9, color: mutedText }}>
+              🔒 Stored locally in your browser
+            </span>
+            <span style={{ fontSize: 9, color: mutedText }}>
+              Claude · GPT-4o · Gemini
+            </span>
+          </div>
         </div>
       )}
-
-      <div className="p-3 flex gap-2 flex-shrink-0"
-        style={{ background: t.bg2, borderTop: `1px solid ${t.border}` }}>
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }}}
-          placeholder={selectedRepo ? 'Ask anything about this codebase...' : 'Select a repo first...'}
-          disabled={!selectedRepo}
-          className="flex-1 rounded-lg px-3 py-2 text-xs outline-none mono disabled:opacity-40"
-          style={{
-            background: t.bg3,
-            border: `1px solid ${t.border}`,
-            color: t.text,
-          }}
-        />
-        <button
-          onClick={handleSend}
-          disabled={!selectedRepo || !input.trim() || loading}
-          className="flex items-center justify-center w-9 h-9 rounded-lg transition-all disabled:opacity-30"
-          style={{ background: t.accentBg, color: t.accentFg }}
-        >
-          <SendIcon />
-        </button>
-      </div>
     </div>
   )
 }

@@ -2,7 +2,7 @@ import { useState, useContext } from 'react'
 import { ThemeContext } from '../App'
 import { getTheme } from '../utils/helpers'
 
-function TreeNode({ node, depth = 0 }) {
+function TreeNode({ node, depth = 0, onFileSelect }) {
   const [open, setOpen] = useState(depth === 0)
   const { theme } = useContext(ThemeContext)
   const t = getTheme(theme)
@@ -15,16 +15,15 @@ function TreeNode({ node, depth = 0 }) {
       <div>
         <div
           onClick={() => setOpen(!open)}
-          className="flex items-center gap-1.5 py-1 cursor-pointer rounded transition-all"
-          style={{ paddingLeft: `${8 + depth * 12}px`, color: t.accentText }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: `${8 + depth * 12}px`, paddingTop: 4, paddingBottom: 4, cursor: 'pointer', color: t.accentText, transition: 'background 0.12s' }}
           onMouseEnter={e => e.currentTarget.style.background = t.bg3}
           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
         >
-          <span className="text-[10px]">{open ? '▾' : '▸'}</span>
-          <span className="text-xs font-medium">{name}/</span>
+          <span style={{ fontSize: 10, flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+          <span style={{ fontSize: 12, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}/</span>
         </div>
         {open && node.children?.map((child, i) => (
-          <TreeNode key={i} node={child} depth={depth + 1} />
+          <TreeNode key={i} node={child} depth={depth + 1} onFileSelect={onFileSelect} />
         ))}
       </div>
     )
@@ -32,21 +31,36 @@ function TreeNode({ node, depth = 0 }) {
 
   return (
     <div
-      className="flex items-center gap-1.5 py-1 cursor-pointer rounded transition-all"
-      style={{ paddingLeft: `${8 + depth * 12}px` }}
-      onMouseEnter={e => e.currentTarget.style.background = t.bg3}
-      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+      onClick={() => onFileSelect?.(node.path)}
+      title={`Ask PRGuard about ${node.path}`}
+      style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: `${8 + depth * 12}px`, paddingTop: 4, paddingBottom: 4, cursor: 'pointer', transition: 'background 0.12s', position: 'relative' }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = t.bg3
+        const badge = e.currentTarget.querySelector('.ask-badge')
+        if (badge) badge.style.opacity = '1'
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = 'transparent'
+        const badge = e.currentTarget.querySelector('.ask-badge')
+        if (badge) badge.style.opacity = '0'
+      }}
     >
-      <span className="text-[10px]" style={{ color: fileColors[node.language] || t.text3 }}>›</span>
-      <span className="text-xs" style={{ color: t.text2 }}>{name}</span>
+      <span style={{ fontSize: 10, color: fileColors[node.language] || t.text3, flexShrink: 0 }}>›</span>
+      <span style={{ fontSize: 12, color: t.text2, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+      <span className="ask-badge" style={{ opacity: 0, fontSize: 9, padding: '1px 6px', borderRadius: 3, marginRight: 6, color: t.accentText, background: t.accent + '20', border: `1px solid ${t.accent}44`, transition: 'opacity 0.15s', flexShrink: 0 }}>
+        ask →
+      </span>
     </div>
   )
 }
 
-export default function FileTree({ files }) {
+export default function FileTree({ files, onFileSelect }) {
+  // ── No scroll here — parent in Dashboard handles it ──
   return (
-    <div className="py-1">
-      {files.map((node, i) => <TreeNode key={i} node={node} />)}
+    <div style={{ paddingTop: 4, paddingBottom: 4 }}>
+      {files.map((node, i) => (
+        <TreeNode key={i} node={node} onFileSelect={onFileSelect} />
+      ))}
     </div>
   )
 }

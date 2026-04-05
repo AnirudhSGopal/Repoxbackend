@@ -30,7 +30,9 @@ body.theme-light {
 
 .mono { font-family: 'IBM Plex Mono', monospace; }
 
-::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar { width: 6px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-body.theme-dark  ::-webkit-scrollbar-thumb { background: #2a2f3d; }
-body.theme-light ::-webkit-scrollbar-thumb { background: #c0c0c0; }
+body.theme-dark  ::-webkit-scrollbar-thumb { background: #2a3a4a; border-radius: 3px; }
+body.theme-light ::-webkit-scrollbar-thumb { background: #c0c0c0; border-radius: 3px; }
+body.theme-dark  ::-webkit-scrollbar-thumb:hover { background: #d97706; }
+body.theme-light ::-webkit-scrollbar-thumb:hover { background: #d97706; }
