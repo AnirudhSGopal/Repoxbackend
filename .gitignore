@@ -1,7 +1,45 @@
+# ── Python ────────────────────────────────────────────────────────────────────
 venv/
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+
+# ── Node ──────────────────────────────────────────────────────────────────────
 node_modules/
-.VSCodeCounter/
+frontend/dist/
+
+# ── Environment & Secrets ─────────────────────────────────────────────────────
 .env
 backend/.env
+frontend/.env
+*.pem
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.VSCodeCounter/
+.vscode/
+.idea/
+
+# ── Database & Cache ──────────────────────────────────────────────────────────
+backend/chroma_db/
+*.sqlite3
+*.db
+
+# ── Logs & Debug ──────────────────────────────────────────────────────────────
+*.log
+*.txt
+!README.md
+!CONTRIBUTING.md
+!LICENSE.txt
+!requirements.txt
+
+# ── Temp test/debug scripts ───────────────────────────────────────────────────
+check_db*.py
+backend/check_auth.py
+backend/test_*.py
+backend/find_working_model.py
+backend/list_*_models.py
+backend/list_models.py
+backend/*_models.json
+backend/*_models.txt
+frontend/log.txt

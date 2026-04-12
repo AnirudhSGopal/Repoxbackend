@@ -60,7 +60,7 @@ export default function Landing() {
           </button>
 
           <button
-            onClick={() => navigate('/dashboard')}
+            onClick={() => navigate('/login')}
             className="text-xs px-3 py-1.5 rounded font-bold"
             style={{ background: t.accentBg, color: t.accentFg }}
           >
@@ -89,7 +89,7 @@ export default function Landing() {
         </p>
 
         <button
-          onClick={() => navigate('/dashboard')}
+          onClick={() => navigate('/login')}
           className="px-8 py-3.5 rounded-lg font-bold text-sm"
           style={{ background: t.accentBg, color: t.accentFg }}
         >

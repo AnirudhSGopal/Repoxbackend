@@ -1,11 +1,10 @@
 import { useEffect, useState, useContext } from "react";
 import { ThemeContext } from "../App";
-
-const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
+import { getGithubLoginUrl, setScopedApiKey, setScopedProvider } from "../api/client";
 
 const PROVIDER_LIST = [
   { id: "claude",  label: "Claude Sonnet",   sub: "Anthropic · Best for code",    placeholder: "sk-ant-...", recommended: true  },
-  { id: "gpt4o",   label: "GPT-4o",          sub: "OpenAI · Most popular",         placeholder: "sk-...",     recommended: false },
+  { id: "gpt",    label: "GPT-4o",          sub: "OpenAI · Most popular",         placeholder: "sk-...",     recommended: false },
   { id: "gemini",  label: "Gemini 1.5 Pro",  sub: "Google · Free tier available",  placeholder: "AIza...",    recommended: false },
 ];
 
@@ -270,25 +269,23 @@ export default function Signup() {
   const [step, setStep] = useState(1);
 
   // Step 2 state
-  const [apiKeys,   setApiKeys]   = useState({ claude: "", gpt4o: "", gemini: "" });
-  const [showKeys,  setShowKeys]  = useState({ claude: false, gpt4o: false, gemini: false });
-  const [savedKeys, setSavedKeys] = useState({ claude: false, gpt4o: false, gemini: false });
-  const [connected, setConnected] = useState({ claude: false, gpt4o: false, gemini: false });
+  const [apiKeys,   setApiKeys]   = useState({ claude: "", gpt: "", gemini: "" });
+  const [showKeys,  setShowKeys]  = useState({ claude: false, gpt: false, gemini: false });
+  const [savedKeys, setSavedKeys] = useState({ claude: false, gpt: false, gemini: false });
+  const [connected, setConnected] = useState({ claude: false, gpt: false, gemini: false });
   const [activeId,  setActiveId]  = useState(null);
 
   useEffect(() => { setMounted(true); }, []);
 
   const handleGitHubSignup = () => {
-    const scope = "read:user,repo";
-    const redirectUri = `${window.location.origin}/auth/callback`;
-    window.location.href = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=${scope}&redirect_uri=${redirectUri}`;
+    window.location.href = getGithubLoginUrl();
   };
 
   const handleSaveKey = (providerId) => {
     const key = apiKeys[providerId];
     if (!key) return;
-    localStorage.setItem("prguard_provider", providerId);
-    localStorage.setItem("prguard_apikey", key);
+    setScopedProvider(providerId);
+    setScopedApiKey(key);
     setActiveId(providerId);
     setConnected(prev => ({ ...prev, [providerId]: true }));
     setSavedKeys(prev => ({ ...prev, [providerId]: true }));

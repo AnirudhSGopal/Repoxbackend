@@ -5,14 +5,23 @@ export const useRepos = () => {
   const [repos, setRepos] = useState([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    getRepos().then(data => {
+  const refresh = async () => {
+    setLoading(true)
+    try {
+      const data = await getRepos()
       setRepos(data)
+    } catch (err) {
+      setRepos([])
+    } finally {
       setLoading(false)
-    })
+    }
+  }
+
+  useEffect(() => {
+    refresh()
   }, [])
 
-  return { repos, loading }
+  return { repos, loading, refresh }
 }
 
 export const useIssues = (repo) => {
@@ -24,6 +33,9 @@ export const useIssues = (repo) => {
     setLoading(true)
     getIssues(repo).then(data => {
       setIssues(data)
+      setLoading(false)
+    }).catch(err => {
+      setIssues([])
       setLoading(false)
     })
   }, [repo])
@@ -40,6 +52,9 @@ export const useFiles = (repo) => {
     setLoading(true)
     getFiles(repo).then(data => {
       setFiles(data)
+      setLoading(false)
+    }).catch(err => {
+      setFiles([])
       setLoading(false)
     })
   }, [repo])

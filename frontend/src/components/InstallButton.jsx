@@ -1,6 +1,12 @@
 import { useContext, useState, useEffect, useRef } from 'react'
 import { ThemeContext } from '../App'
 import { getTheme } from '../utils/helpers'
+import {
+  getScopedApiKey,
+  getScopedProvider,
+  setScopedApiKey,
+  setScopedProvider,
+} from '../api/client'
 
 const PROVIDERS = [
   {
@@ -44,11 +50,12 @@ export default function InstallButton({ onProviderChange }) {
   const [connected, setConnected] = useState({ claude: false, gpt4o: false, gemini: false })
   const [activeProvider, setActiveProvider] = useState('claude')
   const ref = useRef(null)
+  const saveTimeoutsRef = useRef({})
 
   // Load persisted keys
   useEffect(() => {
-    const provider = localStorage.getItem('prguard_provider')
-    const key = localStorage.getItem('prguard_apikey')
+    const provider = getScopedProvider()
+    const key = getScopedApiKey()
     if (provider && key) {
       setActiveProvider(provider)
       setApiKeys(prev => ({ ...prev, [provider]: key }))
@@ -65,16 +72,29 @@ export default function InstallButton({ onProviderChange }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  useEffect(() => {
+    return () => {
+      Object.values(saveTimeoutsRef.current).forEach((timeoutId) => {
+        if (timeoutId) clearTimeout(timeoutId)
+      })
+    }
+  }, [])
+
   const handleSave = (providerId) => {
     const key = apiKeys[providerId]
     if (!key) return
-    localStorage.setItem('prguard_provider', providerId)
-    localStorage.setItem('prguard_apikey', key)
+    setScopedProvider(providerId)
+    setScopedApiKey(key)
     setActiveProvider(providerId)
     setConnected(prev => ({ ...prev, [providerId]: true }))
     setSavedKeys(prev => ({ ...prev, [providerId]: true }))
     onProviderChange?.(providerId, key)
-    setTimeout(() => setSavedKeys(prev => ({ ...prev, [providerId]: false })), 1500)
+    if (saveTimeoutsRef.current[providerId]) {
+      clearTimeout(saveTimeoutsRef.current[providerId])
+    }
+    saveTimeoutsRef.current[providerId] = setTimeout(() => {
+      setSavedKeys(prev => ({ ...prev, [providerId]: false }))
+    }, 1500)
   }
 
   const connectedCount = Object.values(connected).filter(Boolean).length

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
+import { getGithubLoginUrl } from "../api/client";
+import { useSession } from "../hooks/useSession";
 
-const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
-
-const getStyles = (theme) => {
+export const getStyles = (theme) => {
   const dark = theme === "dark";
   return `
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Syne:wght@400;500;600;700;800&display=swap');
@@ -296,10 +297,46 @@ const getStyles = (theme) => {
     .auth-switch a:hover {
       text-decoration: underline;
     }
+
+    .auth-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+
+    .auth-input {
+      width: 100%;
+      border: 1px solid ${dark ? '#2a2a2a' : '#ddd8cc'};
+      background: ${dark ? '#0f0f0f' : '#fcfbf8'};
+      color: ${dark ? '#f3f4f6' : '#1f2937'};
+      border-radius: 10px;
+      padding: 11px 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      outline: none;
+    }
+
+    .auth-input:focus {
+      border-color: #eab308;
+      box-shadow: 0 0 0 3px rgba(234,179,8,0.18);
+    }
+
+    .auth-error {
+      margin: 0 0 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: #ef4444;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.28);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
   `;
 };
 
 export default function Login() {
+  const { loading, isAdmin, isUser } = useSession();
   const [mounted, setMounted] = useState(false);
   const [theme, setTheme] = useState(() =>
     localStorage.getItem("prguard-theme") || "dark"
@@ -309,6 +346,22 @@ export default function Login() {
     setMounted(true);
   }, []);
 
+  if (loading) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0d0f12', color: '#6b7280' }}>
+        Loading...
+      </div>
+    )
+  }
+
+  if (isAdmin) {
+    return <Navigate to="/admin/dashboard" replace />
+  }
+
+  if (isUser) {
+    return <Navigate to="/dashboard" replace />
+  }
+
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
     setTheme(next);
@@ -316,9 +369,7 @@ export default function Login() {
   };
 
   const handleGitHubLogin = () => {
-    const scope = "read:user,repo";
-    const redirectUri = `${window.location.origin}/auth/callback`;
-    window.location.href = `https://github.com/login/oauth/authorize?client_id=${GITHUB_CLIENT_ID}&scope=${scope}&redirect_uri=${redirectUri}`;
+    window.location.href = getGithubLoginUrl();
   };
 
   return (
@@ -356,7 +407,7 @@ export default function Login() {
           </h1>
 
           <p className="auth-sub">
-            Connect your GitHub to access your indexed repos and AI-powered codebase insights.
+            Connect your GitHub account to access your indexed repos and AI-powered codebase insights.
           </p>
 
           <div className="auth-features">
@@ -372,10 +423,14 @@ export default function Login() {
             ))}
           </div>
 
-          <button className="github-btn" onClick={handleGitHubLogin}>
+          <button className="github-btn" onClick={handleGitHubLogin} type="button">
             <GitHubIcon />
             Continue with GitHub
           </button>
+
+          <p className="auth-switch">
+            Admin access? <a href="/admin/login">Use email sign-in →</a>
+          </p>
 
           <p className="auth-legal">
             By signing in, you agree to our{" "}

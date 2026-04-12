@@ -5,15 +5,23 @@ import Navbar from '../components/Navbar'
 import RepoList from '../components/StatsBar'
 import IssueList from '../components/ActivityFeed'
 import FileTree from '../components/ReviewCard'
-import ChatPanel from '../components/ChatPanel'
+import ChatPanel, { ConnectRepoModal } from '../components/ChatPanel'
 import { useRepos, useIssues, useFiles } from '../hooks/useReviews'
+import {
+  deleteApiKey,
+  getApiKeyStatus,
+  getScopedProvider,
+  saveApiKey,
+  setActiveProvider,
+  setScopedProvider,
+} from '../api/client'
 
 const PROVIDER_LIST = [
   { id: 'claude', label: 'Claude Sonnet',  sub: 'Anthropic · Best for code',   placeholder: 'sk-ant-...', recommended: true  },
-  { id: 'gpt4o',  label: 'GPT-4o',         sub: 'OpenAI · Most popular',        placeholder: 'sk-...',     recommended: false },
+  { id: 'gpt',    label: 'GPT-4o',         sub: 'OpenAI · Most popular',        placeholder: 'sk-...',     recommended: false },
   { id: 'gemini', label: 'Gemini 1.5 Pro', sub: 'Google · Free tier available', placeholder: 'AIza...',    recommended: false },
 ]
-const PROVIDER_NAMES = { claude: 'Claude Sonnet', gpt4o: 'GPT-4o', gemini: 'Gemini 1.5 Pro' }
+const PROVIDER_NAMES = { claude: 'Claude Sonnet', gpt: 'GPT-4o', gemini: 'Gemini 1.5 Pro' }
 
 // ── Resize handle ─────────────────────────────────────────────────────────────
 function ResizeHandle({ onMouseDown, dark }) {
@@ -95,33 +103,37 @@ export default function Dashboard() {
   }, [repoWidth, issueWidth])
 
   // ── App state ─────────────────────────────────────────────────────────────
-  const [selectedRepo,  setSelectedRepo]  = useState('fastapi/fastapi')
+  const [selectedRepo,  setSelectedRepo]  = useState(null)
   const [pendingRepo,   setPendingRepo]   = useState(null)
   const [selectedIssue, setSelectedIssue] = useState(null)
   const [leftTab,       setLeftTab]       = useState('issues')
   const [chatInput,     setChatInput]     = useState('')
   const [autoSend,      setAutoSend]      = useState(false)
-  const [extraRepos,    setExtraRepos]    = useState([])
-
   const [providerLabel, setProviderLabel] = useState('No provider')
+  const [apiPanelError, setApiPanelError] = useState('')
   useEffect(() => {
     const read = () => {
-      const id = localStorage.getItem('prguard_provider')
+      const id = getScopedProvider()
       setProviderLabel(id ? (PROVIDER_NAMES[id] ?? id) : 'No provider')
     }
     read()
     window.addEventListener('storage', read)
-    const timer = setInterval(read, 500)
+    const timer = setInterval(read, 1500)
     return () => { window.removeEventListener('storage', read); clearInterval(timer) }
   }, [])
 
-  const { repos: fetchedRepos, loading: reposLoading } = useRepos()
   const { issues, loading: issuesLoading } = useIssues(selectedRepo)
   const { files,  loading: filesLoading  } = useFiles(selectedRepo)
-  const allRepos = [...fetchedRepos, ...extraRepos]
 
   const handleRepoSelect = useCallback((repoName) => {
     if (repoName === selectedRepo) return
+    if (!selectedRepo) {
+      setSelectedRepo(repoName)
+      setSelectedIssue(null)
+      setChatInput('')
+      setAutoSend(false)
+      return
+    }
     setPendingRepo(repoName)
   }, [selectedRepo])
 
@@ -144,34 +156,126 @@ export default function Dashboard() {
     setAutoSend(false)
   }, [])
 
-  const handleRepoConnect = useCallback((newRepo) => {
-    setExtraRepos(prev => {
-      if (prev.find(r => r.name === newRepo.name)) return prev
-      return [...prev, newRepo]
-    })
-    setPendingRepo(null)
+  const [pinnedRepos,    setPinnedRepos]    = useState(() => {
+    const saved = localStorage.getItem('prguard_pinned')
+    if (!saved) return []
+    try {
+      return JSON.parse(saved)
+    } catch {
+      localStorage.removeItem('prguard_pinned')
+      return []
+    }
+  })
+
+  useEffect(() => {
+    localStorage.setItem('prguard_pinned', JSON.stringify(pinnedRepos))
+  }, [pinnedRepos])
+
+  const [hiddenRepos,    setHiddenRepos]    = useState(() => {
+    const saved = localStorage.getItem('prguard_hidden')
+    if (!saved) return []
+    try {
+      return JSON.parse(saved)
+    } catch {
+      localStorage.removeItem('prguard_hidden')
+      return []
+    }
+  })
+
+  useEffect(() => {
+    localStorage.setItem('prguard_hidden', JSON.stringify(hiddenRepos))
+  }, [hiddenRepos])
+
+  const { repos: fetchedRepos, loading: reposLoading, refresh: refreshRepos } = useRepos()
+
+  const handleRepoConnect = useCallback(async (newRepo) => {
+    // Refresh the repository list from the backend
+    await refreshRepos()
+    
+    // Also unhide if manually re-connecting
+    setHiddenRepos(prev => prev.filter(name => name !== newRepo.name))
+    
     setSelectedRepo(newRepo.name)
     setSelectedIssue(null)
     setChatInput('')
+    setPendingRepo(null)
+  }, [refreshRepos])
+
+  const handleRemoveRepo = useCallback(async (repoName) => {
+    try {
+      const { disconnectRepo } = await import('../api/client')
+      const repoToDisconnect = fetchedRepos.find(r => r.name === repoName)
+      if (!repoToDisconnect) {
+        alert('Repository not found in connected list')
+        return
+      }
+
+      await disconnectRepo(repoToDisconnect.id)
+      
+      await refreshRepos()
+      setPinnedRepos(prev => prev.filter(name => name !== repoName))
+      setHiddenRepos(prev => prev.filter(name => name !== repoName))
+      
+      if (selectedRepo === repoName) {
+        setSelectedRepo(null)
+        setSelectedIssue(null)
+      }
+    } catch (err) {
+      alert('Failed to disconnect repository')
+    }
+  }, [fetchedRepos, selectedRepo, refreshRepos])
+
+  const handleTogglePin = useCallback((repoName) => {
+    setPinnedRepos(prev => {
+      if (prev.includes(repoName)) return prev.filter(n => n !== repoName)
+      return [...prev, repoName]
+    })
   }, [])
+
+  const allRepos = fetchedRepos // ✅ ONLY USE AUTHED REPOS FROM BACKEND
+
+  const sortedRepos = [...allRepos].sort((a, b) => {
+    const aPinned = pinnedRepos.includes(a.name)
+    const bPinned = pinnedRepos.includes(b.name)
+    if (aPinned && !bPinned) return -1
+    if (!aPinned && bPinned) return 1
+    return 0
+  })
 
   // ── API panel ─────────────────────────────────────────────────────────────
   const [apiPanelOpen, setApiPanelOpen] = useState(false)
-  const [apiKeys,      setApiKeys]      = useState({ claude: '', gpt4o: '', gemini: '' })
-  const [showKeys,     setShowKeys]     = useState({ claude: false, gpt4o: false, gemini: false })
-  const [savedKeys,    setSavedKeys]    = useState({ claude: false, gpt4o: false, gemini: false })
-  const [connected,    setConnected]    = useState({ claude: false, gpt4o: false, gemini: false })
+  const [apiKeys,      setApiKeys]      = useState({ claude: '', gpt: '', gemini: '' })
+  const [showKeys,     setShowKeys]     = useState({ claude: false, gpt: false, gemini: false })
+  const [savedKeys,    setSavedKeys]    = useState({ claude: false, gpt: false, gemini: false })
+  const [connected,    setConnected]    = useState({ claude: false, gpt: false, gemini: false })
   const [activeId,     setActiveId]     = useState('claude')
 
-  useEffect(() => {
-    const id  = localStorage.getItem('prguard_provider')
-    const key = localStorage.getItem('prguard_apikey')
-    if (id && key) {
-      setActiveId(id)
-      setApiKeys(prev => ({ ...prev, [id]: key }))
-      setConnected(prev => ({ ...prev, [id]: true }))
+  const refreshApiStatus = useCallback(async () => {
+    try {
+      const status = await getApiKeyStatus()
+      const nextConnected = { claude: false, gpt: false, gemini: false }
+      const masked = { claude: '', gpt: '', gemini: '' }
+      ;(status.items || []).forEach((item) => {
+        if (item?.provider && Object.prototype.hasOwnProperty.call(nextConnected, item.provider)) {
+          nextConnected[item.provider] = Boolean(item.has_key)
+          masked[item.provider] = item.masked_key || ''
+        }
+      })
+      const active = status.active_provider || 'claude'
+      setConnected(nextConnected)
+      setApiKeys(masked)
+      setActiveId(active)
+      setScopedProvider(active)
+      setProviderLabel(PROVIDER_NAMES[active] ?? active)
+      setApiPanelError('')
+    } catch (err) {
+      setApiPanelError(err?.response?.data?.detail || err?.message || 'Failed to load API key status')
     }
   }, [])
+
+  useEffect(() => {
+    refreshApiStatus()
+  }, [refreshApiStatus])
 
   useEffect(() => {
     const handler = () => setApiPanelOpen(true)
@@ -179,16 +283,50 @@ export default function Dashboard() {
     return () => window.removeEventListener('prguard:openApiPanel', handler)
   }, [])
 
-  const handleApiSave = (providerId) => {
+  const [connectModalOpen, setConnectModalOpen] = useState(false)
+  useEffect(() => {
+    const handler = () => setConnectModalOpen(true)
+    window.addEventListener('prguard:openConnect', handler)
+    return () => window.removeEventListener('prguard:openConnect', handler)
+  }, [])
+
+  const handleApiSave = async (providerId) => {
     const key = apiKeys[providerId]
-    if (!key) return
-    localStorage.setItem('prguard_provider', providerId)
-    localStorage.setItem('prguard_apikey', key)
-    setActiveId(providerId)
-    setConnected(prev => ({ ...prev, [providerId]: true }))
-    setSavedKeys(prev => ({ ...prev, [providerId]: true }))
-    setProviderLabel(PROVIDER_NAMES[providerId] ?? providerId)
-    setTimeout(() => setSavedKeys(prev => ({ ...prev, [providerId]: false })), 1500)
+    if (!key || key.includes('...')) return
+    try {
+      await saveApiKey(providerId, key, true)
+      await refreshApiStatus()
+      window.dispatchEvent(new CustomEvent('prguard:api-keys-updated'))
+      setSavedKeys(prev => ({ ...prev, [providerId]: true }))
+      setTimeout(() => setSavedKeys(prev => ({ ...prev, [providerId]: false })), 1500)
+    } catch (err) {
+      setApiPanelError(err?.response?.data?.detail || err?.message || 'Failed to save API key')
+    }
+  }
+
+  const handleSetActiveProvider = async (providerId) => {
+    if (!connected[providerId]) return
+    try {
+      await setActiveProvider(providerId)
+      await refreshApiStatus()
+      window.dispatchEvent(new CustomEvent('prguard:api-keys-updated'))
+    } catch (err) {
+      setApiPanelError(err?.response?.data?.detail || err?.message || 'Failed to switch provider')
+    }
+  }
+
+  const handleDeleteApiKey = async (providerId) => {
+    const confirmed = window.confirm(`Remove ${PROVIDER_NAMES[providerId] ?? providerId} API key?`)
+    if (!confirmed) {
+      return
+    }
+    try {
+      await deleteApiKey(providerId)
+      await refreshApiStatus()
+      window.dispatchEvent(new CustomEvent('prguard:api-keys-updated'))
+    } catch (err) {
+      setApiPanelError(err?.response?.data?.detail || err?.message || 'Failed to remove API key')
+    }
   }
 
   const connectedCount = Object.values(connected).filter(Boolean).length
@@ -218,9 +356,12 @@ export default function Dashboard() {
           </div>
           <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
             <RepoList
-              repos={allRepos}
+              repos={sortedRepos}
+              pinnedRepos={pinnedRepos}
               selectedRepo={selectedRepo}
               onSelectRepo={handleRepoSelect}
+              onRemoveRepo={handleRemoveRepo}
+              onTogglePin={handleTogglePin}
               onConnectClick={() => window.dispatchEvent(new CustomEvent('prguard:openConnect'))}
               loading={reposLoading}
             />
@@ -365,12 +506,26 @@ export default function Dashboard() {
                         style={{ padding: '4px 10px', fontSize: 10, fontWeight: 500, borderRadius: 4, flexShrink: 0, transition: 'all 0.15s', cursor: apiKeys[provider.id] ? 'pointer' : 'not-allowed', border: `1px solid ${savedKeys[provider.id] ? '#22c55e' : apiKeys[provider.id] ? t.accent : panelBord}`, background: savedKeys[provider.id] ? '#22c55e22' : apiKeys[provider.id] ? t.accentBg : inputBg, color: savedKeys[provider.id] ? '#22c55e' : apiKeys[provider.id] ? t.accentFg : mutedText }}>
                         {savedKeys[provider.id] ? '✓' : connected[provider.id] ? 'Update' : 'Save'}
                       </button>
+                      <button onClick={() => handleSetActiveProvider(provider.id)} disabled={!connected[provider.id]}
+                        style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: `1px solid ${panelBord}`, background: activeId === provider.id ? '#22c55e22' : inputBg, color: activeId === provider.id ? '#22c55e' : mutedText, cursor: connected[provider.id] ? 'pointer' : 'not-allowed' }}>
+                        Active
+                      </button>
+                      <button onClick={() => handleDeleteApiKey(provider.id)} disabled={!connected[provider.id]}
+                        style={{ padding: '4px 8px', fontSize: 10, borderRadius: 4, border: `1px solid #ef444466`, background: dark ? '#2a1010' : '#fee2e2', color: '#ef4444', cursor: connected[provider.id] ? 'pointer' : 'not-allowed' }}>
+                        Remove
+                      </button>
                     </div>
                   </div>
                 ))}
 
+                {apiPanelError && (
+                  <div style={{ padding: '8px 12px', fontSize: 10, color: '#ef4444', borderTop: `1px solid ${rowBord}` }}>
+                    {apiPanelError}
+                  </div>
+                )}
+
                 <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: dark ? '#0a0d11' : '#fafafa' }}>
-                  <span style={{ fontSize: 9, color: mutedText }}>🔒 Stored locally in your browser</span>
+                  <span style={{ fontSize: 9, color: mutedText }}>🔒 Stored securely on server</span>
                   <span style={{ fontSize: 9, color: mutedText }}>Claude · GPT-4o · Gemini</span>
                 </div>
               </div>
@@ -428,6 +583,15 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {connectModalOpen && (
+        <ConnectRepoModal 
+          t={t} 
+          dark={dark} 
+          onClose={() => setConnectModalOpen(false)} 
+          onConnect={handleRepoConnect} 
+        />
       )}
     </div>
   )
