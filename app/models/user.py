@@ -11,7 +11,7 @@ class User(Base):
     id:           Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     github_id:    Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
     username:     Mapped[str] = mapped_column(String)
-    email:        Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    email:        Mapped[Optional[str]] = mapped_column(String, unique=True, index=True, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     role:         Mapped[str] = mapped_column(String(20), default="user", index=True)
     auth_provider: Mapped[str] = mapped_column(String(20), default="github", index=True)

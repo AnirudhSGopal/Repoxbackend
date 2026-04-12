@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -20,13 +21,14 @@ from app.security import (
 )
 from app.services.admin_state import record_user_activity
 from app.services.auth_session import (
-    SESSION_COOKIE_NAME,
-    clear_session_cookie,
-    get_user_from_session,
-    issue_session_for_user,
+    USER_SESSION_COOKIE_NAME,
+    clear_user_session_cookie,
+    get_user_from_user_session,
+    issue_user_session,
 )
 
 router = APIRouter()
+logger = logging.getLogger("prguard")
 
 
 def _normalize_role(value: str | None) -> str:
@@ -46,10 +48,10 @@ def _normalize_frontend_origin(value: str) -> str:
 
 
 def _build_redirect_page(target_url: str, status_text: str, oauth_payload: str | None = None) -> HTMLResponse:
-        oauth_line = f"window.__PRGUARD_OAUTH__ = {oauth_payload};" if oauth_payload else ""
-        return HTMLResponse(
-                status_code=200,
-                content=f"""<!DOCTYPE html>
+    oauth_line = f"window.__PRGUARD_OAUTH__ = {oauth_payload};" if oauth_payload else ""
+    return HTMLResponse(
+        status_code=200,
+        content=f"""<!DOCTYPE html>
 <html>
     <head>
         <meta charset=\"utf-8\" />
@@ -64,16 +66,33 @@ def _build_redirect_page(target_url: str, status_text: str, oauth_payload: str |
         </script>
     </body>
 </html>""",
-        )
+    )
+
+
+def _build_session_payload(user: User) -> dict:
+    role = _normalize_role(user.role)
+    return {
+        "user_id": user.id,
+        "userId": user.id,
+        "email": user.email,
+        "role": role,
+        "token": "cookie",
+    }
 
 
 @router.post("/login")
 async def rejected_user_password_login() -> None:
+    logger.warning("user_password_login_attempt rejected: oauth_required")
     raise HTTPException(status_code=403, detail="Users must sign in with GitHub OAuth. Admins must use /admin/login.")
 
 
 @router.get("/github")
-async def github_login(request: Request, frontend_origin: str = ""):
+async def github_login(
+    request: Request,
+    frontend_origin: str = "",
+    user_token: str | None = Cookie(default=None, alias=USER_SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+):
     origin = (frontend_origin or "").strip()
     if not origin:
         origin = (request.headers.get("origin") or "").strip()
@@ -82,6 +101,15 @@ async def github_login(request: Request, frontend_origin: str = ""):
         if referer:
             parsed = urlparse(referer)
             origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+
+    if not origin:
+        origin = _normalize_frontend_origin((settings.FRONTEND_URL or "").strip())
+
+    session_user = await get_user_from_user_session(db, user_token)
+    if session_user and _normalize_role(session_user.role) == "admin":
+        logger.info("signup_blocked_for_admin user_id=%s", session_user.id)
+        return RedirectResponse(url=f"{origin}/admin/login?reason=admin_local_login_required")
+
     return RedirectResponse(url=create_github_oauth_url(frontend_origin=origin))
 
 
@@ -105,16 +133,17 @@ async def _load_or_create_github_user(
 
     if user:
         if _normalize_role(user.role) == "admin" or _normalize_provider(user.auth_provider) == "local":
+            logger.warning("oauth_callback denied: github_id=%s reason=admin_account", github_id)
             raise HTTPException(status_code=403, detail="Admin accounts cannot sign in with GitHub")
         user.role = "user"
         user.auth_provider = "github"
-        user.github_id = github_id
-        user.username = github_login or user.username
-        user.email = github_email or user.email
+        user.github_id = user.github_id or github_id
+        user.username = user.username or github_login or user.username
+        user.email = user.email or github_email
         user.avatar_url = user_info.get("avatar_url")
-        user.password_hash = None
         user.access_token = token_hash
         user.last_login_at = datetime.now(timezone.utc)
+        logger.info("oauth_linked_existing user_id=%s source=github_id", user.id)
         return user
 
     if github_email:
@@ -123,16 +152,43 @@ async def _load_or_create_github_user(
         user = result.scalars().first()
         if user:
             if _normalize_role(user.role) == "admin" or _normalize_provider(user.auth_provider) == "local":
+                logger.warning("oauth_callback denied: email=%s reason=admin_account", github_email)
                 raise HTTPException(status_code=403, detail="Admin accounts cannot sign in with GitHub")
             user.role = "user"
             user.auth_provider = "github"
             user.github_id = github_id
-            user.username = github_login or user.username
-            user.email = github_email
+            user.username = user.username or github_login or user.username
+            user.email = user.email or github_email
+            user.avatar_url = user_info.get("avatar_url")
+            user.access_token = token_hash
+            user.last_login_at = datetime.now(timezone.utc)
+            logger.info("oauth_linked_existing user_id=%s source=verified_email", user.id)
+            return user
+
+    if github_login:
+        stmt = (
+            select(User)
+            .where(
+                func.lower(User.username) == github_login.lower(),
+                User.role == "user",
+                User.auth_provider == "github",
+            )
+            .order_by(User.created_at.desc())
+            .limit(1)
+        )
+        result = await db.execute(stmt)
+        user = result.scalars().first()
+        if user:
+            user.role = "user"
+            user.auth_provider = "github"
+            user.github_id = github_id
+            user.username = github_login
+            user.email = github_email or user.email
             user.avatar_url = user_info.get("avatar_url")
             user.password_hash = None
             user.access_token = token_hash
             user.last_login_at = datetime.now(timezone.utc)
+            logger.info("oauth_role_assignment user_id=%s role=user provider=github source=username_match", user.id)
             return user
 
     user = User(
@@ -147,6 +203,8 @@ async def _load_or_create_github_user(
         last_login_at=datetime.now(timezone.utc),
     )
     db.add(user)
+    await db.flush()
+    logger.info("oauth_role_assignment user_id=%s role=user provider=github source=new_user", user.id)
     return user
 
 
@@ -156,19 +214,25 @@ async def github_callback(
     installation_id: str = "",
     error: str = "",
     state: str = "",
+    user_token: str | None = Cookie(default=None, alias=USER_SESSION_COOKIE_NAME),
     db: AsyncSession = Depends(get_db),
 ):
+    logger.info("oauth_callback_received error=%s has_code=%s installation_id=%s", bool(error), bool(code), bool(installation_id))
     if error:
+        logger.warning("oauth_callback_failed reason=provider_error error=%s", error)
         raise HTTPException(status_code=400, detail=f"GitHub OAuth error: {error}")
     if not code:
+        logger.warning("oauth_callback_failed reason=missing_code")
         raise HTTPException(status_code=400, detail="Missing OAuth code")
 
     access_token = await exchange_code_for_token(code)
     if not access_token:
+        logger.warning("oauth_callback_failed reason=token_exchange_failed")
         raise HTTPException(status_code=401, detail="Failed to obtain access token from GitHub")
 
     user_info = await get_github_user(access_token)
     if "id" not in user_info or "login" not in user_info:
+        logger.warning("oauth_callback_failed reason=invalid_github_profile")
         raise HTTPException(status_code=401, detail="Invalid GitHub token")
 
     state_data = decode_oauth_state(state)
@@ -178,6 +242,8 @@ async def github_callback(
     if not frontend_url:
         raise HTTPException(status_code=500, detail="FRONTEND_URL is not configured and no valid frontend_origin was provided")
 
+    prior_session_user = await get_user_from_user_session(db, user_token)
+
     try:
         db_user = await _load_or_create_github_user(db, user_info=user_info, access_token=access_token)
     except HTTPException as exc:
@@ -185,7 +251,7 @@ async def github_callback(
             admin_login_target = f"{frontend_url}/admin/login?reason=admin_local_login_required"
             response = _build_redirect_page(admin_login_target, "Admin account detected. Redirecting to admin login...")
             is_prod = settings.ENVIRONMENT == "production"
-            clear_session_cookie(response)
+            clear_user_session_cookie(response)
             response.delete_cookie(
                 key="gh_token",
                 path="/",
@@ -197,14 +263,14 @@ async def github_callback(
         raise
 
     db_role = _normalize_role(db_user.role)
-    payload = json.dumps(
-        {
-            "userId": db_user.id,
-            "email": db_user.email,
-            "role": db_role,
-            "token": "cookie",
-        }
-    )
+    if db_role != "user":
+        logger.error("oauth_callback_blocked user_id=%s role=%s", db_user.id, db_role)
+        admin_login_target = f"{frontend_url}/admin/login?reason=admin_local_login_required"
+        response = _build_redirect_page(admin_login_target, "Admin accounts must use email login.")
+        clear_user_session_cookie(response)
+        return response
+
+    payload = json.dumps(_build_session_payload(db_user))
     callback_target = f"{frontend_url}/auth/callback"
     response = _build_redirect_page(callback_target, "Signing in, please wait...", payload)
 
@@ -225,19 +291,37 @@ async def github_callback(
         samesite="none" if is_prod else "lax",
         secure=is_prod,
     )
-    issue_session_for_user(db_user, response)
+
+    if prior_session_user and prior_session_user.id != db_user.id:
+        logger.info("session_rotated previous_user_id=%s new_user_id=%s", prior_session_user.id, db_user.id)
+        prior_session_user.session_token_hash = None
+
+    issue_user_session(db_user, response)
     await db.commit()
+    logger.info("oauth_callback_succeeded user_id=%s role=user", db_user.id)
     return response
 
 
 @router.get("/me")
 async def get_current_user(
-    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    user_token: str | None = Cookie(default=None, alias=USER_SESSION_COOKIE_NAME),
     db: AsyncSession = Depends(get_db),
 ):
-    db_user = await get_user_from_session(db, session_token)
+    db_user = await get_user_from_user_session(db, user_token)
     if not db_user:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
+        return {
+            "authenticated": False,
+            "user_id": None,
+            "id": None,
+            "login": None,
+            "name": None,
+            "avatar_url": None,
+            "email": None,
+            "html_url": "",
+            "is_admin": False,
+            "role": None,
+            "auth_provider": None,
+        }
 
     record_user_activity(
         user_id=str(db_user.id),
@@ -245,6 +329,8 @@ async def get_current_user(
     )
 
     return {
+        "authenticated": True,
+        "user_id": db_user.id,
         "id": db_user.id,
         "login": db_user.username,
         "name": db_user.username,
@@ -260,12 +346,14 @@ async def get_current_user(
 @router.post("/logout")
 async def logout(
     response: Response,
-    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    user_token: str | None = Cookie(default=None, alias=USER_SESSION_COOKIE_NAME),
     gh_token: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    session_user = await get_user_from_session(db, session_token)
+    session_user = await get_user_from_user_session(db, user_token)
+    session_role = _normalize_role(session_user.role) if session_user else "user"
     if session_user:
+        logger.info("logout_requested user_id=%s role=%s", session_user.id, session_role)
         session_user.session_token_hash = None
 
     if gh_token:
@@ -278,7 +366,7 @@ async def logout(
 
     await db.commit()
 
-    clear_session_cookie(response)
+    clear_user_session_cookie(response)
     is_prod = settings.ENVIRONMENT == "production"
     response.delete_cookie(
         key="gh_token",
@@ -287,14 +375,8 @@ async def logout(
         samesite="none" if is_prod else "lax",
         secure=is_prod,
     )
-    response.delete_cookie(
-        key="admin_session",
-        path="/",
-        httponly=True,
-        samesite="none" if is_prod else "lax",
-        secure=is_prod,
-    )
-    return {"status": "logged out"}
+    redirect_target = "/login"
+    return {"status": "logged out", "redirect": redirect_target, "role": session_role}
 
 
 @router.get("/callback")

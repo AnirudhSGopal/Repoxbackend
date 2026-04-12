@@ -5,7 +5,6 @@ from pydantic import BaseModel
 from sqlalchemy import select, func, delete
 from app.models import get_db, Review, WebhookEvent, User, ConnectedRepository
 from app.middleware import requireUser
-from app.security import hash_access_token
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.admin_state import record_api_key_status, record_user_activity
 from app.services.user_api_keys import (
@@ -34,29 +33,10 @@ def _headers(token: str) -> dict:
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-
-def _require_token(gh_token: str | None) -> str:
-    if not gh_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    return gh_token
-
-
 async def _require_authenticated_user(
     current_user: User = Depends(requireUser),
 ) -> User:
     return current_user
-
-
-async def _require_authenticated_token_user(db: AsyncSession, gh_token: str | None) -> User:
-    token = _require_token(gh_token)
-    stmt = select(User).where(User.access_token == hash_access_token(token))
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid session")
-    if (user.role or "").strip().lower() != "user" or (user.auth_provider or "").strip().lower() != "github":
-        raise HTTPException(status_code=403, detail="GitHub user access required")
-    return user
 
 
 @router.get("/api-keys")
@@ -133,20 +113,12 @@ async def remove_user_api_key(
 @router.get("/repos")
 async def get_repos(
     current_user: User = Depends(requireUser),
-    gh_token: str = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Return ONLY repositories that the user has explicitly connected.
     """
-    if not gh_token:
-        raise HTTPException(status_code=401, detail="Missing auth token")
-
-    stmt = select(User).where(User.access_token == hash_access_token(gh_token))
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid session")
+    user = current_user
 
     stmt = select(ConnectedRepository).where(ConnectedRepository.user_id == user.id)
     result = await db.execute(stmt)
@@ -205,20 +177,12 @@ async def connect_repo(
     repo_id: str = Body(...),
     repo_name: str = Body(...),
     current_user: User = Depends(requireUser),
-    gh_token: str = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Explicitly connect a repository to the account.
     """
-    if not gh_token:
-        raise HTTPException(status_code=401, detail="Missing auth token")
-
-    stmt = select(User).where(User.access_token == hash_access_token(gh_token))
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid session")
+    user = current_user
 
     stmt = select(ConnectedRepository).where(
         ConnectedRepository.user_id == user.id,
@@ -242,20 +206,12 @@ async def connect_repo(
 async def disconnect_repo(
     repo_id: str,
     current_user: User = Depends(requireUser),
-    gh_token: str = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Disconnect a repository from the account.
     """
-    if not gh_token:
-        raise HTTPException(status_code=401, detail="Missing auth token")
-
-    stmt = select(User).where(User.access_token == hash_access_token(gh_token))
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid session")
+    user = current_user
 
     stmt = delete(ConnectedRepository).where(
         ConnectedRepository.user_id == user.id,

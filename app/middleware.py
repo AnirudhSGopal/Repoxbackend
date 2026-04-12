@@ -11,7 +11,7 @@ from app.models.base import AsyncSessionLocal
 from app.models import get_db
 from app.models.user import User
 from app.services.admin_auth import hash_session_token
-from app.services.auth_session import SESSION_COOKIE_NAME
+from app.services.auth_session import ADMIN_SESSION_COOKIE_NAME, USER_SESSION_COOKIE_NAME
 
 logger = logging.getLogger("prguard")
 
@@ -61,6 +61,7 @@ class AdminRoleMiddleware(BaseHTTPMiddleware):
 
     _open_admin_paths = {
         "/admin/login",
+        "/admin/me",
     }
 
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -68,11 +69,15 @@ class AdminRoleMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/admin"):
             return await call_next(request)
 
+        logger.info("admin_middleware_enter path=%s method=%s", path, request.method)
+
         if request.method == "OPTIONS" or path in self._open_admin_paths:
+            logger.info("admin_middleware_bypass path=%s reason=open_or_options", path)
             return await call_next(request)
 
-        raw_token = (request.cookies.get(SESSION_COOKIE_NAME) or "").strip()
+        raw_token = (request.cookies.get(ADMIN_SESSION_COOKIE_NAME) or "").strip()
         if not raw_token:
+            logger.info("admin_middleware_reject path=%s reason=missing_session_token", path)
             return JSONResponse(status_code=401, content={"detail": "Admin authentication required"})
 
         token_hash = hash_session_token(raw_token)
@@ -87,15 +92,17 @@ class AdminRoleMiddleware(BaseHTTPMiddleware):
             admin_user = result.scalar_one_or_none()
 
         if not admin_user:
+            logger.info("admin_middleware_reject path=%s reason=session_not_admin", path)
             return JSONResponse(status_code=403, content={"detail": "Admin access required"})
 
         request.state.admin_user_id = admin_user.id
         request.state.admin_username = admin_user.username
+        logger.info("admin_middleware_allow path=%s admin_user_id=%s", path, admin_user.id)
         return await call_next(request)
 
 
 async def requireAuth(
-    session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE_NAME),
+    session_token: str | None = Cookie(default=None, alias=USER_SESSION_COOKIE_NAME),
     db: AsyncSession = Depends(get_db),
 ) -> User:
     raw_token = (session_token or "").strip()
@@ -113,7 +120,49 @@ async def requireAuth(
     return user
 
 
-async def requireUser(current_user: User = Depends(requireAuth)) -> User:
+async def get_current_user(
+    user_token: str | None = Cookie(default=None, alias=USER_SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    raw_token = (user_token or "").strip()
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    stmt = select(User).where(
+        User.session_token_hash == hash_session_token(raw_token),
+        User.role == "user",
+        User.auth_provider == "github",
+        User.is_disabled.is_(False),
+    )
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired user session")
+    return user
+
+
+async def get_current_admin(
+    admin_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    raw_token = (admin_token or "").strip()
+    if not raw_token:
+        raise HTTPException(status_code=401, detail="Admin authentication required")
+
+    stmt = select(User).where(
+        User.session_token_hash == hash_session_token(raw_token),
+        User.role == "admin",
+        User.auth_provider == "local",
+        User.is_disabled.is_(False),
+    )
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired admin session")
+    return user
+
+
+async def requireUser(current_user: User = Depends(get_current_user)) -> User:
     if (current_user.role or "").strip().lower() != "user":
         raise HTTPException(status_code=403, detail="User access required")
     if (current_user.auth_provider or "").strip().lower() != "github":
@@ -121,9 +170,13 @@ async def requireUser(current_user: User = Depends(requireAuth)) -> User:
     return current_user
 
 
-async def requireAdmin(current_user: User = Depends(requireAuth)) -> User:
+async def requireAdmin(current_user: User = Depends(get_current_admin)) -> User:
     if (current_user.role or "").strip().lower() != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     if (current_user.auth_provider or "").strip().lower() != "local":
         raise HTTPException(status_code=403, detail="Local admin login required")
+    return current_user
+
+
+async def admin_required(current_user: User = Depends(requireAdmin)) -> User:
     return current_user

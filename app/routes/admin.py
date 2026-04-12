@@ -1,19 +1,22 @@
 from datetime import datetime, timedelta, timezone
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.middleware import admin_required
 from app.models import User, get_db
 from app.models.api_key import UserApiKey
 from app.services.auth_session import (
-    clear_session_cookie,
-    issue_session_for_user,
+    ADMIN_SESSION_COOKIE_NAME,
+    authenticate_admin_credentials,
+    clear_admin_session_cookie,
+    get_user_from_admin_session,
+    issue_admin_session,
 )
-from app.services.auth_session import authenticate_admin_credentials
 from app.services.admin_state import get_recent_chat_logs
 from app.services.crypto import decrypt_secret
 from app.services.user_api_keys import mask_key
@@ -119,9 +122,20 @@ def _as_utc(dt: datetime | None) -> datetime | None:
 
 
 @router.post("/login")
-async def admin_login(payload: AdminLoginPayload, response: Response, db: AsyncSession = Depends(get_db)):
+async def admin_login(
+    payload: AdminLoginPayload,
+    response: Response,
+    admin_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+):
     user = await authenticate_admin_credentials(db, email=payload.email, password=payload.password)
-    issue_session_for_user(user, response)
+
+    prior_session_user = await get_user_from_admin_session(db, admin_token)
+    if prior_session_user and prior_session_user.id != user.id:
+        logger.info("session_rotated previous_user_id=%s new_user_id=%s", prior_session_user.id, user.id)
+        prior_session_user.session_token_hash = None
+
+    issue_admin_session(user, response)
     is_prod = settings.ENVIRONMENT == "production"
     response.delete_cookie(
         key="gh_token",
@@ -132,7 +146,9 @@ async def admin_login(payload: AdminLoginPayload, response: Response, db: AsyncS
     )
     await db.commit()
 
+    logger.info("admin_login_success user_id=%s", user.id)
     return {
+        "user_id": user.id,
         "userId": user.id,
         "email": user.email,
         "role": "admin",
@@ -141,15 +157,24 @@ async def admin_login(payload: AdminLoginPayload, response: Response, db: AsyncS
 
 
 @router.get("/me")
-async def admin_me(request: Request, db: AsyncSession = Depends(get_db)):
-    admin_id = getattr(request.state, "admin_user_id", "")
-    stmt = select(User).where(User.id == admin_id)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
+async def admin_me(
+    admin_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_user_from_admin_session(db, admin_token)
     if not user:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        return {
+            "authenticated": False,
+            "user_id": None,
+            "id": None,
+            "username": None,
+            "email": None,
+            "role": None,
+        }
 
     return {
+        "authenticated": True,
+        "user_id": user.id,
         "id": user.id,
         "username": user.username,
         "email": user.email,
@@ -158,30 +183,25 @@ async def admin_me(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/logout")
-async def admin_logout(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
-    admin_id = getattr(request.state, "admin_user_id", "")
-    if admin_id:
-        stmt = select(User).where(User.id == admin_id)
-        result = await db.execute(stmt)
-        user = result.scalar_one_or_none()
-        if user:
-            user.session_token_hash = None
-            await db.commit()
+async def admin_logout(
+    response: Response,
+    admin_token: str | None = Cookie(default=None, alias=ADMIN_SESSION_COOKIE_NAME),
+    db: AsyncSession = Depends(get_db),
+):
+    user = await get_user_from_admin_session(db, admin_token)
+    admin_id = user.id if user else ""
+    logger.info("admin_logout_requested admin_user_id=%s", admin_id or "unknown")
+    if user:
+        user.session_token_hash = None
+        await db.commit()
 
-    clear_session_cookie(response)
-    is_prod = settings.ENVIRONMENT == "production"
-    response.delete_cookie(
-        key="admin_session",
-        path="/",
-        httponly=True,
-        samesite="none" if is_prod else "lax",
-        secure=is_prod,
-    )
-    return {"status": "logged_out", "redirect": "/admin/login"}
+    clear_admin_session_cookie(response)
+    return {"status": "logged_out", "redirect": "/"}
 
 
 @router.get("/users")
 async def admin_users(
+    _: User = Depends(admin_required),
     db: AsyncSession = Depends(get_db),
     search: str = "",
     role: str = "all",
@@ -236,7 +256,11 @@ async def admin_users(
 
 
 @router.get("/user/{user_id}")
-async def admin_user_detail(user_id: str, db: AsyncSession = Depends(get_db)):
+async def admin_user_detail(
+    user_id: str,
+    _: User = Depends(admin_required),
+    db: AsyncSession = Depends(get_db),
+):
     stmt = select(User).where(User.id == user_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -251,7 +275,12 @@ async def admin_user_detail(user_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.patch("/user/{user_id}")
-async def admin_update_user(user_id: str, payload: AdminUserPatchPayload, db: AsyncSession = Depends(get_db)):
+async def admin_update_user(
+    user_id: str,
+    payload: AdminUserPatchPayload,
+    _: User = Depends(admin_required),
+    db: AsyncSession = Depends(get_db),
+):
     stmt = select(User).where(User.id == user_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -262,6 +291,8 @@ async def admin_update_user(user_id: str, payload: AdminUserPatchPayload, db: As
         role_value = payload.role.strip().lower()
         if role_value not in {"user", "admin"}:
             raise HTTPException(status_code=400, detail="role must be 'user' or 'admin'")
+        if role_value == "admin" and (user.auth_provider or "").strip().lower() != "local":
+            raise HTTPException(status_code=400, detail="Only local accounts can be assigned admin role")
         user.role = role_value
 
     if payload.is_disabled is not None:
@@ -286,7 +317,10 @@ async def admin_update_user(user_id: str, payload: AdminUserPatchPayload, db: As
 
 
 @router.get("/api-keys-status")
-async def admin_api_keys_status(db: AsyncSession = Depends(get_db)):
+async def admin_api_keys_status(
+    _: User = Depends(admin_required),
+    db: AsyncSession = Depends(get_db),
+):
     users_result = await db.execute(select(User))
     users = list(users_result.scalars().all())
 
@@ -315,7 +349,7 @@ async def admin_api_keys_status(db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/logs")
-async def admin_logs():
+async def admin_logs(_: User = Depends(admin_required)):
     logs = get_recent_chat_logs(limit=50)
     success_count = sum(1 for item in logs if item["status"] == "success")
     failure_count = sum(1 for item in logs if item["status"] == "failure")

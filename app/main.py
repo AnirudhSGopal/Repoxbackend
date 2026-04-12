@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 import logging
-from app.routes import webhook, auth, dashboard, chat, admin
+from app.routes import webhook, auth, dashboard, chat, admin, user
 from app.config import settings
 from app.models import init_db
 
@@ -38,9 +38,30 @@ app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 app.include_router(webhook.router, prefix="/webhook", tags=["webhook"])
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(user.router, prefix="/user", tags=["user"])
 app.include_router(dashboard.router, prefix="/api", tags=["dashboard"])
 app.include_router(chat.router, prefix="/api", tags=["chat"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
+
+
+def _log_runtime_wiring() -> None:
+    logger.info("runtime_entrypoint module=app.main")
+    logger.info("runtime_router_sources auth=app.routes.auth admin=app.routes.admin user=app.routes.user dashboard=app.routes.dashboard chat=app.routes.chat webhook=app.routes.webhook")
+
+    middleware_chain = [m.cls.__name__ for m in app.user_middleware]
+    logger.info("runtime_middleware_chain=%s", " -> ".join(middleware_chain))
+
+    registered_routes: list[str] = []
+    for route in app.routes:
+        methods = ",".join(sorted(getattr(route, "methods", []) or []))
+        path = getattr(route, "path", "")
+        name = getattr(route, "name", "")
+        if path:
+            registered_routes.append(f"{methods} {path} ({name})")
+
+    logger.info("runtime_routes_count=%s", len(registered_routes))
+    for item in sorted(registered_routes):
+        logger.info("runtime_route %s", item)
 
 
 @app.on_event("startup")
@@ -80,6 +101,7 @@ async def startup():
             print("[STARTUP] Skipping RAG preload (PRELOAD_RAG_ON_STARTUP=false).")
 
         print("[STARTUP] PRGuard backend started successfully.")
+        _log_runtime_wiring()
     except Exception as e:
         print(f"[CRITICAL] System startup failed: {e}")
         # In production, we exit. In dev, we might allow limited mode.
