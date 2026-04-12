@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getMe } from '../api/client'
+import { getAdminMe, getMe } from '../api/client'
 
 export const useSession = () => {
   const [loading, setLoading] = useState(true)
@@ -11,13 +11,18 @@ export const useSession = () => {
 
     const loadSession = async () => {
       try {
-        const session = await getMe()
+        const [userSession, adminSession] = await Promise.all([getMe(), getAdminMe()])
         if (!active) return
 
-        if (session) {
-          const role = session?.role === 'admin' ? 'admin' : 'user'
-          setSessionRole(role)
-          setSessionUser(session)
+        if (userSession?.login) {
+          setSessionRole('user')
+          setSessionUser(userSession)
+          return
+        }
+
+        if (adminSession?.role === 'admin') {
+          setSessionRole('admin')
+          setSessionUser(adminSession)
           return
         }
       } catch {

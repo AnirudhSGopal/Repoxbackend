@@ -70,6 +70,8 @@ async def set_active_provider(db: AsyncSession, user_id: str, provider: str) -> 
             row.is_active = True
         else:
             row.is_active = False
+        # Merge to ensure changes are tracked in async context
+        await db.merge(row)
     if not has_requested:
         raise HTTPException(status_code=404, detail=f"No API key configured for provider '{normalized}'.")
     await db.commit()
@@ -97,10 +99,11 @@ async def upsert_user_api_key(
     fingerprint = key_fingerprint(key_value)
 
     if row:
+        # Update existing row and merge to ensure changes are tracked in async context
         row.encrypted_api_key = encrypted
         row.key_fingerprint = fingerprint
-        if make_active:
-            row.is_active = True
+        row.is_active = make_active
+        row = await db.merge(row)
     else:
         row = UserApiKey(
             user_id=user_id,
@@ -119,6 +122,8 @@ async def upsert_user_api_key(
         other_rows = (await db.execute(other_stmt)).scalars().all()
         for item in other_rows:
             item.is_active = False
+            # Merge each item to ensure changes are tracked
+            await db.merge(item)
 
     await db.commit()
 

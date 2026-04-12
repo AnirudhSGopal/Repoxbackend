@@ -88,13 +88,22 @@ export default function Landing() {
           and answers your questions so you can contribute without getting lost.
         </p>
 
-        <button
-          onClick={() => navigate('/login')}
-          className="px-8 py-3.5 rounded-lg font-bold text-sm"
-          style={{ background: t.accentBg, color: t.accentFg }}
-        >
-          Try the Demo →
-        </button>
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <button
+            onClick={() => navigate('/login')}
+            className="px-8 py-3.5 rounded-lg font-bold text-sm"
+            style={{ background: t.accentBg, color: t.accentFg }}
+          >
+            User Login →
+          </button>
+          <button
+            onClick={() => navigate('/admin/login')}
+            className="px-6 py-3.5 rounded-lg font-bold text-sm"
+            style={{ background: t.bg3, color: t.text2, border: `1px solid ${t.border}` }}
+          >
+            Admin Login
+          </button>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-16 text-left">
           {features.map(f => (

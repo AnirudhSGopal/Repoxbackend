@@ -20,25 +20,23 @@ function SessionBootstrapRoute() {
   const { loading, isAdmin, isUser } = useSession()
 
   if (loading) return <LoadingScreen />
-  if (isAdmin) return <Navigate to="/admin/dashboard" replace />
   if (isUser) return <Navigate to="/dashboard" replace />
-  return <Navigate to="/login" replace />
+  if (isAdmin) return <Navigate to="/admin/dashboard" replace />
+  return <Landing />
 }
 
 function UserRoute({ children }) {
-  const { loading, isAdmin, isUser } = useSession()
+  const { loading, isUser } = useSession()
 
   if (loading) return <LoadingScreen />
-  if (isAdmin) return <Navigate to="/admin/dashboard" replace />
   if (!isUser) return <Navigate to="/login" replace />
   return children
 }
 
 function AdminRoute({ children }) {
-  const { loading, isAdmin, isUser } = useSession()
+  const { loading, isAdmin } = useSession()
 
   if (loading) return <LoadingScreen />
-  if (isUser) return <Navigate to="/dashboard" replace />
   if (!isAdmin) return <Navigate to="/admin/login" replace />
   return children
 }
@@ -61,7 +59,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/"                element={<SessionBootstrapRoute />} />
-          <Route path="/landing"         element={<Landing />} />
+          <Route path="/landing"         element={<Navigate to="/" replace />} />
           <Route path="/login"           element={<Login />} />
           <Route path="/signup"          element={<Signup />} />
           <Route path="/dashboard"       element={<UserRoute><Dashboard /></UserRoute>} />

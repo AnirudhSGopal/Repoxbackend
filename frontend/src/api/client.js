@@ -174,6 +174,34 @@ export const getApiKeyStatus = async () => {
   }
 }
 
+export const getUserProfile = async () => {
+  const res = await client.get('/user/profile')
+  const payload = res.data || {}
+  const status = payload.api_key_status || { items: [], active_provider: 'claude', has_any_key: false }
+  const active = normalizeProvider(status.active_provider || 'claude')
+  providerCache = active
+  return {
+    ...payload,
+    api_key_status: {
+      ...status,
+      active_provider: active,
+    },
+  }
+}
+
+export const saveUserApiKey = async (provider, apiKey, makeActive = true) => {
+  const normalized = normalizeProvider(provider)
+  const res = await client.post('/user/api-key', {
+    provider: normalized,
+    api_key: apiKey,
+    make_active: makeActive,
+  })
+  if (makeActive) {
+    providerCache = normalized
+  }
+  return res.data
+}
+
 export const saveApiKey = async (provider, apiKey, makeActive = true) => {
   const normalized = normalizeProvider(provider)
   const res = await client.put(`/api/api-keys/${normalized}`, {
@@ -240,7 +268,13 @@ export const getIndexStatus = async (repo) => {
 // ── Auth ──────────────────────────────────────────────────────────────────────
 export const getMe = async () => {
   try {
-    const res = await client.get('/auth/me')
+    const res = await client.get('/auth/me', {
+      // Unauthenticated is an expected state during bootstrap.
+      validateStatus: (status) => status === 200 || status === 401,
+    })
+    if (res.status === 401) {
+      return null
+    }
     return res.data
   } catch {
     return null
@@ -249,13 +283,14 @@ export const getMe = async () => {
 
 export const logout = async () => {
   try {
-    await client.post('/auth/logout')
+    const res = await client.post('/auth/logout')
+    return res.data || { redirect: '/login', role: 'user' }
   } catch {
-    // ignore
+    return { redirect: '/login', role: 'user' }
   }
 }
 
-export const login = async (identifier, password) => {
+export const adminLogin = async (identifier, password) => {
   const body = {
     email: identifier,
     password,
@@ -270,22 +305,23 @@ export const getGithubLoginUrl = () => {
   return BASE_URL ? `${BASE_URL}${loginPath}` : loginPath
 }
 
-export const adminLogin = async (username, password) => {
-  return login(username, password)
-}
-
 export const adminLogout = async () => {
-  return logout()
+  try {
+    const res = await client.post('/admin/logout')
+    return res.data || { redirect: '/', role: 'admin' }
+  } catch {
+    return { redirect: '/', role: 'admin' }
+  }
 }
 
 export const getAdminMe = async () => {
-  const data = await getMe()
-  if (data?.role !== 'admin') {
-    const err = new Error('Admin access required')
-    err.response = { data: { detail: 'Admin access required' }, status: 403 }
-    throw err
+  const res = await client.get('/admin/me', {
+    validateStatus: (status) => status === 200 || status === 401 || status === 403,
+  })
+  if (res.status !== 200) {
+    return null
   }
-  return data
+  return res.data
 }
 
 export const getAdminUsers = async (params = {}) => {

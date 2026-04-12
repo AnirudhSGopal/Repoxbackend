@@ -42,9 +42,14 @@ export default function Callback() {
           return
         }
 
-        const destination = session.role === 'admin' ? '/admin/dashboard' : '/dashboard'
+        if (session.role !== 'user') {
+          setStatus('Admin accounts must use email login. Redirecting...')
+          timerId = setTimeout(() => navigate('/admin/login?reason=admin_local_login_required', { replace: true }), 600)
+          return
+        }
+
         setStatus('Login successful! Redirecting...')
-        timerId = setTimeout(() => navigate(destination, { replace: true }), 600)
+        timerId = setTimeout(() => navigate('/dashboard', { replace: true }), 600)
       } catch {
         if (!active) return
         setStatus('Could not verify session. Redirecting...')

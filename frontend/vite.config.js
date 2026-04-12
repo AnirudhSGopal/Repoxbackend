@@ -21,6 +21,18 @@ export default defineConfig({
             target: proxyTarget,
             changeOrigin: true,
           },
+          '/admin': {
+            target: proxyTarget,
+            changeOrigin: true,
+          },
+          '/user': {
+            target: proxyTarget,
+            changeOrigin: true,
+          },
+          '/health': {
+            target: proxyTarget,
+            changeOrigin: true,
+          },
         }
       : undefined,
   },

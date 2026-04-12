@@ -8,7 +8,6 @@ from app.services.rag import is_indexed, index_repo, get_index_stats
 from app.services.github import fetch_all_files
 from app.limiter import chat_limiter, index_limiter
 from app.models import get_db, User, ConnectedRepository
-from app.security import hash_access_token
 from app.config import settings
 from app.services.admin_state import (
     record_api_key_status,
@@ -77,7 +76,7 @@ async def chat(
     Connects frontend ChatPanel to RAG + LLM pipeline.
     """
     logger.info(f"[CHAT] Received chat request for repo: {request.repo}")
-    user = None
+    user = current_user
     provider = (request.provider or "").strip().lower() or "claude"
     if provider == "gpt4o":
         provider = "gpt"
@@ -90,15 +89,6 @@ async def chat(
 
         if not request.repo:
             raise HTTPException(status_code=400, detail="No repo selected.")
-
-        # ── LEAST PRIVILEGE: Internal Verification ──
-        # Check if this user has explicitly connected this repository.
-        token_hash = hash_access_token(gh_token or "")
-        stmt = select(User).where(User.access_token == token_hash)
-        result = await db.execute(stmt)
-        user = result.scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid session or not authenticated")
 
         provider, resolved_api_key = await resolve_user_provider_key(
             db,
@@ -272,13 +262,7 @@ async def index_repository(
     # ── RATE LIMIT CHECK ──
     index_limiter.check("global")
 
-    # ── LEAST PRIVILEGE: Internal Verification ──
-    token_hash = hash_access_token(gh_token or "")
-    stmt = select(User).where(User.access_token == token_hash)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=401, detail="Authenticated session required to index")
+    user = current_user
 
     stmt = select(ConnectedRepository).where(
         ConnectedRepository.user_id == user.id,

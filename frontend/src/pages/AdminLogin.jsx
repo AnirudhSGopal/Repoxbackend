@@ -52,7 +52,7 @@ const getAdminLoginStyles = (theme) => {
 export default function AdminLogin() {
   const { theme, toggleTheme } = useContext(ThemeContext)
   const navigate = useNavigate()
-  const { loading, isAdmin, isUser } = useSession()
+  const { loading, isAdmin } = useSession()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -60,10 +60,6 @@ export default function AdminLogin() {
   const [error, setError] = useState('')
 
   const styleSheet = useMemo(() => getStyles(theme) + getAdminLoginStyles(theme), [theme])
-
-  if (!loading && isUser) {
-    return <Navigate to="/dashboard" replace />
-  }
 
   if (!loading && isAdmin) {
     return <Navigate to="/admin/dashboard" replace />
@@ -132,9 +128,9 @@ export default function AdminLogin() {
           <form className="admin-form" onSubmit={onSubmit}>
             <input
               className="admin-input"
-              placeholder="Admin email"
-              type="email"
-              autoComplete="email"
+              placeholder="Admin email or username"
+              type="text"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={busy}

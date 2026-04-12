@@ -1,6 +1,8 @@
 import { useEffect, useState, useContext } from "react";
+import { Link, Navigate, useLocation } from "react-router-dom";
 import { ThemeContext } from "../App";
 import { getGithubLoginUrl, setScopedApiKey, setScopedProvider } from "../api/client";
+import { useSession } from "../hooks/useSession";
 
 const PROVIDER_LIST = [
   { id: "claude",  label: "Claude Sonnet",   sub: "Anthropic · Best for code",    placeholder: "sk-ant-...", recommended: true  },
@@ -127,6 +129,31 @@ const getStyles = (theme) => {
     .auth-heading { font-size: 22px; font-weight: 800; color: ${dark ? "#ffffff" : "#0a0a0a"}; line-height: 1.25; margin: 0 0 10px; letter-spacing: -0.5px; }
     .auth-heading .accent { color: #eab308; }
     .auth-sub { font-size: 13px; color: ${dark ? "#555555" : "#888888"}; margin: 0 0 24px; line-height: 1.6; font-family: 'JetBrains Mono', monospace; }
+
+    .signup-notice {
+      margin: 0 0 16px;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1.5;
+      border: 1px solid;
+    }
+    .signup-notice.warn {
+      color: ${dark ? "#fcd34d" : "#92400e"};
+      background: ${dark ? "rgba(250,204,21,0.08)" : "rgba(251,191,36,0.12)"};
+      border-color: ${dark ? "rgba(250,204,21,0.25)" : "rgba(217,119,6,0.28)"};
+    }
+    .signup-notice.info {
+      color: ${dark ? "#93c5fd" : "#1d4ed8"};
+      background: ${dark ? "rgba(59,130,246,0.08)" : "rgba(59,130,246,0.1)"};
+      border-color: ${dark ? "rgba(59,130,246,0.25)" : "rgba(29,78,216,0.24)"};
+    }
+    .signup-notice a {
+      color: inherit;
+      text-decoration: underline;
+      font-weight: 700;
+    }
 
     /* ── Step 1: perks ── */
     .signup-perks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 28px; }
@@ -264,6 +291,8 @@ function EyeIcon({ open }) {
 
 export default function Signup() {
   const { theme, toggleTheme } = useContext(ThemeContext);
+  const location = useLocation();
+  const { loading, isAdmin, isUser } = useSession();
   const dark = theme === "dark";
   const [mounted, setMounted] = useState(false);
   const [step, setStep] = useState(1);
@@ -293,6 +322,34 @@ export default function Signup() {
   };
 
   const connectedCount = Object.values(connected).filter(Boolean).length;
+  const params = new URLSearchParams(location.search || "");
+  const reason = (params.get("reason") || "").toLowerCase();
+  const existing = (params.get("existing_account") || "").toLowerCase();
+
+  let notice = null;
+  if (reason === "admin_local_login_required") {
+    notice = {
+      tone: "warn",
+      text: "Admin accounts use the admin login page. Please continue there.",
+      ctaHref: "/admin/login",
+      ctaLabel: "Go to admin login",
+    };
+  } else if (reason === "account_exists" || existing === "1" || existing === "true") {
+    notice = {
+      tone: "info",
+      text: "An account already exists for this email. Please sign in instead of creating a new account.",
+      ctaHref: "/login",
+      ctaLabel: "Go to login",
+    };
+  }
+
+  if (!loading && isAdmin) {
+    return <Navigate to="/admin/login?reason=admin_local_login_required" replace />;
+  }
+
+  if (!loading && isUser) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const saveBtnStyle = (id) => ({
     border: `1px solid ${savedKeys[id] ? "#22c55e" : apiKeys[id] ? "#eab308" : dark ? "#2a2a2a" : "#ddd8cc"}`,
@@ -319,6 +376,12 @@ export default function Signup() {
         </nav>
 
         <div className={`auth-card ${mounted ? "visible" : ""}`}>
+
+          {notice && (
+            <div className={`signup-notice ${notice.tone}`}>
+              {notice.text} <Link to={notice.ctaHref}>{notice.ctaLabel}</Link>
+            </div>
+          )}
 
           {/* Logo */}
           <div className="auth-logo">

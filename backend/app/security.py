@@ -111,10 +111,9 @@ async def get_github_user(access_token: str) -> dict:
             )
 
         user_data = resp.json()
-        if user_data.get("email"):
-            return user_data
 
-        # GitHub often returns null email unless it's public; query private emails API.
+        # Always prefer a verified email from /user/emails for account linking.
+        # The /user payload may include a public email that is not guaranteed to be verified.
         email_resp = await client.get(
             "https://api.github.com/user/emails",
             headers={
@@ -140,5 +139,10 @@ async def get_github_user(access_token: str) -> dict:
                 )
             if primary_verified:
                 user_data["email"] = primary_verified
+                return user_data
+
+        # Fall back to /user email only when we cannot resolve a verified address.
+        if user_data.get("email"):
+            return user_data
 
     return user_data
