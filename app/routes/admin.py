@@ -18,8 +18,8 @@ from app.services.auth_session import (
     issue_admin_session,
 )
 from app.services.admin_state import get_recent_chat_logs
-from app.services.crypto import decrypt_secret
 from app.services.user_api_keys import mask_key
+from app.services.crypto import decrypt_secret
 
 router = APIRouter()
 logger = logging.getLogger("prguard")
@@ -84,19 +84,7 @@ def _usage_error_count_by_user() -> dict[str, int]:
 
 def _format_user_row(user: User, key_rows: list[UserApiKey], usage_errors: dict[str, int]) -> dict:
     key_status, key_validation, masked_key = _derive_user_key_status(user, key_rows)
-    
-    # Try to get the full unmasked key for display
-    full_key = ""
-    if key_rows:
-        try:
-            for row in key_rows:
-                decrypted = decrypt_secret(row.encrypted_api_key)
-                if decrypted and _looks_like_valid_key(row.provider, decrypted):
-                    full_key = decrypted
-                    break
-        except Exception:
-            full_key = ""
-    
+
     return {
         "id": user.id,
         "username": user.username,
@@ -106,7 +94,6 @@ def _format_user_row(user: User, key_rows: list[UserApiKey], usage_errors: dict[
         "api_key_status": key_status,
         "api_key_validation": key_validation,
         "api_key_masked": masked_key,
-        "api_key_full": full_key,
         "created_at": user.created_at.isoformat() if user.created_at else None,
         "last_login": user.last_login_at.isoformat() if user.last_login_at else None,
         "api_key_usage_errors": usage_errors.get(user.id, 0),

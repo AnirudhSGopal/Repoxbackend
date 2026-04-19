@@ -1,184 +1,191 @@
-import sys
+from __future__ import annotations
+
 import logging
+from collections import defaultdict
+from datetime import datetime, timezone
+from time import monotonic
 from uuid import uuid4
+
 from app.config import settings
+from app.services.redis_client import pop_secret_ref, set_secret_ref
+from workers.review_worker import run_index_repo, run_pr_review
 
 logger = logging.getLogger("prguard")
 
-# ── Redis connection (lazy) ───────────────────────────────────────────────────
 
-_redis_conn = None
+class _TTLJobCache:
+    def __init__(self, maxsize: int, ttl_seconds: int):
+        self.maxsize = maxsize
+        self.ttl_seconds = ttl_seconds
+        self._store: dict[str, tuple[float, dict]] = {}
 
-def _get_redis():
-    """Lazy Redis connection — only connects when actually needed (Linux/Mac)."""
-    global _redis_conn
-    if _redis_conn is None:
-        from redis import Redis
-        _redis_conn = Redis.from_url(settings.REDIS_URL)
-    return _redis_conn
+    def _purge_expired(self) -> None:
+        now = monotonic()
+        expired_keys = [
+            key for key, (inserted_at, _) in self._store.items() if now - inserted_at > self.ttl_seconds
+        ]
+        for key in expired_keys:
+            self._store.pop(key, None)
+
+    def _enforce_maxsize(self) -> None:
+        while len(self._store) > self.maxsize:
+            oldest_key = min(self._store, key=lambda key: self._store[key][0])
+            self._store.pop(oldest_key, None)
+
+    def get(self, key: str, default=None):
+        self._purge_expired()
+        value = self._store.get(key)
+        if not value:
+            return default
+        return value[1]
+
+    def pop(self, key: str, default=None):
+        self._purge_expired()
+        value = self._store.pop(key, None)
+        if not value:
+            return default
+        return value[1]
+
+    def __setitem__(self, key: str, value: dict) -> None:
+        self._purge_expired()
+        self._store[key] = (monotonic(), value)
+        self._enforce_maxsize()
+
+    def values(self):
+        self._purge_expired()
+        return [value for _, value in self._store.values()]
 
 
-def _store_secret(secret_value: str, ttl_seconds: int = 1800) -> str:
+_job_results = _TTLJobCache(maxsize=2048, ttl_seconds=6 * 60 * 60)
+
+
+async def _store_secret_ref(secret_value: str, ttl_seconds: int = 1800) -> str | None:
+    value = (secret_value or "").strip()
+    if not value:
+        return None
     ref = f"secret:{uuid4().hex}"
-    _get_redis().setex(ref, ttl_seconds, secret_value)
+    stored = await set_secret_ref(ref, value, ttl_seconds=ttl_seconds)
+    if not stored:
+        return None
     return ref
 
 
-def resolve_secret_ref(secret_ref: str | None) -> str | None:
-    if not secret_ref:
+async def resolve_secret_ref(secret_ref: str | None) -> str | None:
+    ref = (secret_ref or "").strip()
+    if not ref:
         return None
-    value = _get_redis().get(secret_ref)
-    if value is None:
-        return None
-    _get_redis().delete(secret_ref)
-    if isinstance(value, bytes):
-        return value.decode("utf-8")
-    return str(value)
-
-# ── Enqueue indexing job ──────────────────────────────────────────────────────
-
-def enqueue_index_repo(repo: str, token: str) -> str:
-    """
-    On Windows runs synchronously.
-    On Linux/Mac uses RQ background queue.
-    """
-    if sys.platform == "win32":
-        from workers.review_worker import run_index_repo
-        run_index_repo(repo=repo, token=token)
-        return f"sync-{repo.replace('/', '--')}"
-
-    from rq import Queue
-    q = Queue("indexing", connection=_get_redis(), default_timeout=600)
-    token_ref = _store_secret(token)
-    job = q.enqueue(
-        "workers.review_worker.run_index_repo",
-        kwargs={"repo": repo, "token_ref": token_ref},
-        job_id=f"index-{repo.replace('/', '--')}-{uuid4().hex[:8]}",
-    )
-    return job.id
+    if not ref.startswith("secret:"):
+        return ref
+    return await pop_secret_ref(ref)
 
 
-# ── Enqueue PR review job ─────────────────────────────────────────────────────
+async def enqueue_index_repo(repo: str, token: str) -> str:
+    job_id = f"sync-index-{repo.replace('/', '--')}-{uuid4().hex[:8]}"
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        token_ref = await _store_secret_ref(token)
+        result = await run_index_repo(repo=repo, token=token)
+        result.setdefault("repo", repo)
+        result.setdefault("job_type", "indexing")
+        if token_ref:
+            result.setdefault("token_ref", token_ref)
+        result["status"] = "completed"
+        result.setdefault("started_at", started_at)
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        _job_results[job_id] = result
+        return job_id
+    except Exception as exc:
+        failed_result = {
+            "repo": repo,
+            "job_type": "indexing",
+            "status": "failed",
+            "error": str(exc),
+            "started_at": started_at,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _job_results[job_id] = failed_result
+        logger.exception("Index job failed", extra={"job_id": job_id, "repo": repo})
+        raise
 
-def enqueue_pr_review(
-    repo:      str,
+
+async def enqueue_pr_review(
+    repo: str,
     pr_number: int,
-    token:     str,
-    provider:  str,
-    api_key:   str,
+    token: str,
+    provider: str,
+    api_key: str,
 ) -> str:
-    if sys.platform == "win32":
-        from workers.review_worker import run_pr_review
-        run_pr_review(
+    job_id = f"sync-review-{repo.replace('/', '--')}-pr-{pr_number}-{uuid4().hex[:8]}"
+    started_at = datetime.now(timezone.utc).isoformat()
+    try:
+        token_ref = await _store_secret_ref(token)
+        api_key_ref = await _store_secret_ref(api_key)
+        result = await run_pr_review(
             repo=repo,
             pr_number=pr_number,
             token=token,
             provider=provider,
             api_key=api_key,
         )
-        return f"sync-pr-{pr_number}"
+        result.setdefault("repo", repo)
+        result.setdefault("pr", pr_number)
+        result.setdefault("job_type", "review")
+        if token_ref:
+            result.setdefault("token_ref", token_ref)
+        if api_key_ref:
+            result.setdefault("api_key_ref", api_key_ref)
+        result["status"] = "completed"
+        result.setdefault("started_at", started_at)
+        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        _job_results[job_id] = result
+    except Exception as exc:
+        failed_result = {
+            "repo": repo,
+            "pr": pr_number,
+            "job_type": "review",
+            "status": "failed",
+            "error": str(exc),
+            "started_at": started_at,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _job_results[job_id] = failed_result
+        logger.exception(
+            "Review job failed",
+            extra={"job_id": job_id, "repo": repo, "pr_number": pr_number},
+        )
+    return job_id
 
-    from rq import Queue
-    q = Queue("review", connection=_get_redis(), default_timeout=300)
-    token_ref = _store_secret(token)
-    api_key_ref = _store_secret(api_key)
-    job = q.enqueue(
-        "workers.review_worker.run_pr_review",
-        job_id=f"review-{repo.replace('/', '--')}-pr-{pr_number}",
-        kwargs={
-            "repo":      repo,
-            "pr_number": pr_number,
-            "token_ref": token_ref,
-            "provider":  provider,
-            "api_key_ref": api_key_ref,
-        },
-    )
-    return job.id
-
-
-# ── Job status ────────────────────────────────────────────────────────────────
 
 def get_job_status(job_id: str) -> dict:
-    if sys.platform == "win32" or job_id.startswith("sync-"):
+    result = _job_results.get(job_id)
+    if result is None:
         return {
             "job_id": job_id,
-            "status": "finished",
+            "status": "not_found",
             "result": None,
-            "error":  None,
+            "error": None,
         }
+    return {
+        "job_id": job_id,
+        "status": result.get("status", "unknown"),
+        "result": result,
+        "error": result.get("error"),
+    }
 
-    try:
-        from rq.job import Job
-        job = Job.fetch(job_id, connection=_get_redis())
-        if not job:
-            return {
-                "job_id": job_id,
-                "status": "not_found",
-                "result": None,
-                "error":  None,
-            }
-        return {
-            "job_id": job_id,
-            "status": str(job.get_status()),
-            "result": job.result,
-            "error":  None,
-        }
-    except Exception:
-        logger.exception("Failed to fetch job status")
-        return {
-            "job_id": job_id,
-            "status": "error",
-            "result": None,
-            "error":  "internal_error",
-        }
-
-
-# ── Cancel job ────────────────────────────────────────────────────────────────
 
 def cancel_job(job_id: str) -> bool:
-    if sys.platform == "win32":
-        return False
-    try:
-        from rq.job import Job
-        job = Job.fetch(job_id, connection=_get_redis())
-        job.cancel()
-        return True
-    except Exception:
-        return False
+    return _job_results.pop(job_id, None) is not None
 
-
-# ── Queue stats ───────────────────────────────────────────────────────────────
 
 def get_queue_stats() -> dict:
-    if sys.platform == "win32":
-        return {
-            "indexing": {"queued": 0, "failed": 0, "started": 0},
-            "chat":     {"queued": 0, "failed": 0, "started": 0},
-            "review":   {"queued": 0, "failed": 0, "started": 0},
-            "note":     "Running in sync mode on Windows",
-        }
-
-    from rq import Queue
-    from rq.job import Job
-
-    iq = Queue("indexing", connection=_get_redis())
-    cq = Queue("chat",     connection=_get_redis())
-    rq = Queue("review",   connection=_get_redis())
+    counts = defaultdict(int)
+    for value in _job_results.values():
+        counts[value.get("job_type", "unknown")] += 1
 
     return {
-        "indexing": {
-            "queued":  len(iq),
-            "failed":  iq.failed_job_registry.count,
-            "started": iq.started_job_registry.count,
-        },
-        "chat": {
-            "queued":  len(cq),
-            "failed":  cq.failed_job_registry.count,
-            "started": cq.started_job_registry.count,
-        },
-        "review": {
-            "queued":  len(rq),
-            "failed":  rq.failed_job_registry.count,
-            "started": rq.started_job_registry.count,
-        },
+        "indexing": {"queued": 0, "failed": 0, "started": counts.get("indexing", 0)},
+        "chat": {"queued": 0, "failed": 0, "started": 0},
+        "review": {"queued": 0, "failed": 0, "started": counts.get("review", 0)},
+        "redis_configured": bool((settings.REDIS_URL or "").strip()),
+        "note": "Jobs run synchronously in the request lifecycle for free-tier deployment compatibility.",
     }

@@ -294,7 +294,7 @@ async def index_repository(
                 detail=f"No source files found in '{request.repo}'. Check the repo name or ensure it has supported source files.",
             )
 
-        # Index into ChromaDB
+        # Index into the vector store
         result = await index_repo(
             repo=request.repo,
             files=files,
@@ -333,7 +333,7 @@ async def index_status(repo: str):
     Check if a repo is indexed and how many chunks it has.
     Called by frontend to show indexed/not indexed badge.
     """
-    stats = get_index_stats(repo)
+    stats = await get_index_stats(repo)
     return stats
 
 

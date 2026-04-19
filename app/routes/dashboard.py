@@ -440,7 +440,7 @@ async def trigger_index(
     if not gh_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
-    job_id = enqueue_index_repo(repo=repo, token=gh_token)
+    job_id = await enqueue_index_repo(repo=repo, token=gh_token)
 
     return {
         "job_id":  job_id,

@@ -1,4 +1,4 @@
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, field_validator, model_validator
 from pydantic_settings import BaseSettings
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     model_config = ConfigDict(extra="ignore", env_file=(".env", "../.env"))
 
     GITHUB_APP_ID: str = ""
-    GITHUB_PRIVATE_KEY_PATH: str = "./private-key.pem"
+    GITHUB_PRIVATE_KEY: str = ""
     GITHUB_WEBHOOK_SECRET: str = ""
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
@@ -14,14 +14,13 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    LLM_API_KEY: str = ""
 
     REDIS_URL: str = "redis://localhost:6379"
 
     LANGCHAIN_API_KEY: str = ""
     LANGCHAIN_PROJECT: str = "prguard"
     LANGCHAIN_TRACING_V2: str = "true"
-
-    CHROMA_DB_PATH: str = "./chroma_db"
 
     HTTP_TIMEOUT: int = 60
     DATABASE_URL: str = ""
@@ -35,6 +34,7 @@ class Settings(BaseSettings):
     DB_MAX_RETRY_DELAY_SECONDS: float = 5.0
     FRONTEND_URL: str = ""
     APP_URL: str = ""
+    API_BASE_URL: str = ""
     CORS_ORIGINS: str = ""
     ENV: str = ""
     NODE_ENV: str = ""
@@ -57,8 +57,22 @@ class Settings(BaseSettings):
     CHAT_ENABLE_RAG: bool = False
     PRELOAD_RAG_ON_STARTUP: bool = False
 
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def coerce_debug_value(cls, value):
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        normalized = str(value).strip().lower()
+        if normalized in {"1", "true", "yes", "on", "debug"}:
+            return True
+        if normalized in {"0", "false", "no", "off", "warn", "warning", "info", "error"}:
+            return False
+        return False
+
     def has_any_llm_key(self) -> bool:
-        return any([self.ANTHROPIC_API_KEY, self.OPENAI_API_KEY, self.GEMINI_API_KEY])
+        return any([self.ANTHROPIC_API_KEY, self.OPENAI_API_KEY, self.GEMINI_API_KEY, self.LLM_API_KEY])
 
     @model_validator(mode="after")
     def validate_database_configuration(self):
@@ -66,6 +80,29 @@ class Settings(BaseSettings):
         if not database_url:
             raise ValueError("DATABASE_URL must be set in the environment.")
         self.DATABASE_URL = database_url
+
+        # Compatibility fallback: if API_BASE_URL is omitted, reuse APP_URL.
+        if not (self.API_BASE_URL or "").strip() and (self.APP_URL or "").strip():
+            self.API_BASE_URL = self.APP_URL.strip()
+
+        # Compatibility fallback for legacy single-key deployments.
+        if (self.LLM_API_KEY or "").strip() and not any(
+            [self.ANTHROPIC_API_KEY.strip(), self.OPENAI_API_KEY.strip(), self.GEMINI_API_KEY.strip()]
+        ):
+            provider = (self.MODEL_PROVIDER or "gemini").strip().lower()
+            if provider in {"gpt", "openai"}:
+                self.OPENAI_API_KEY = self.LLM_API_KEY.strip()
+            elif provider in {"claude", "anthropic"}:
+                self.ANTHROPIC_API_KEY = self.LLM_API_KEY.strip()
+            else:
+                self.GEMINI_API_KEY = self.LLM_API_KEY.strip()
+
+        if not self.is_development():
+            for field_name in ("APP_URL", "FRONTEND_URL", "API_BASE_URL"):
+                raw_value = (getattr(self, field_name, "") or "").strip()
+                if raw_value and not raw_value.lower().startswith("https://"):
+                    raise ValueError(f"{field_name} must use HTTPS in non-development environments.")
+
         return self
 
     def normalize_database_url(self, database_url: str) -> str:
@@ -106,7 +143,8 @@ class Settings(BaseSettings):
             normalized_query.append((key, val))
 
         hostname = (parsed.hostname or "").lower()
-        if scheme == "postgresql+asyncpg" and "neon.tech" in hostname and not has_ssl:
+        managed_hosts_requiring_ssl = ("supabase.co", "supabase.com", "neon.tech")
+        if scheme == "postgresql+asyncpg" and any(host in hostname for host in managed_hosts_requiring_ssl) and not has_ssl:
             normalized_query.append(("ssl", "require"))
 
         query = urlencode(normalized_query, doseq=True)
@@ -143,11 +181,7 @@ class Settings(BaseSettings):
 
     def cors_origins(self) -> list[str]:
         configured = [item.strip() for item in self.CORS_ORIGINS.split(",") if item.strip()]
-        defaults = [self.FRONTEND_URL] if self.FRONTEND_URL else []
-
-        if self.is_development():
-            if self.APP_URL:
-                defaults.append(self.APP_URL)
+        defaults = [origin for origin in [self.FRONTEND_URL, self.APP_URL] if origin]
 
         origins = [origin for origin in configured + defaults if origin]
         return list(dict.fromkeys(origins))

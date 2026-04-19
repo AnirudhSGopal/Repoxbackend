@@ -39,63 +39,7 @@ def sync_users_table_schema(sync_conn) -> None:
 
     columns = set(column_info)
     dialect = sync_conn.dialect.name
-    timestamp_type = "TIMESTAMPTZ" if dialect != "sqlite" else "TIMESTAMP"
-
-    if dialect == "sqlite" and column_info.get("github_id") and not column_info["github_id"].get("nullable", True):
-        sync_conn.execute(text("PRAGMA foreign_keys=OFF"))
-        sync_conn.execute(
-            text(
-                """
-                CREATE TABLE users_new (
-                    id VARCHAR PRIMARY KEY,
-                    github_id VARCHAR UNIQUE,
-                    username VARCHAR NOT NULL,
-                    email VARCHAR,
-                    password_hash TEXT,
-                    role VARCHAR(20) DEFAULT 'user' NOT NULL,
-                    auth_provider VARCHAR(20) DEFAULT 'github' NOT NULL,
-                    api_key TEXT,
-                    avatar_url VARCHAR,
-                    access_token VARCHAR NOT NULL,
-                    session_token_hash VARCHAR(128),
-                    is_disabled BOOLEAN DEFAULT FALSE NOT NULL,
-                    last_login_at TIMESTAMP,
-                    created_at TIMESTAMP NOT NULL
-                )
-                """
-            )
-        )
-        sync_conn.execute(
-            text(
-                """
-                INSERT INTO users_new (
-                    id, github_id, username, email, password_hash, role, auth_provider,
-                    api_key, avatar_url, access_token, session_token_hash, is_disabled,
-                    last_login_at, created_at
-                )
-                SELECT
-                    id,
-                    CASE WHEN role = 'admin' THEN NULL ELSE github_id END,
-                    username,
-                    email,
-                    CASE WHEN role = 'admin' THEN password_hash ELSE NULL END,
-                    CASE WHEN role = 'admin' THEN 'admin' ELSE 'user' END,
-                    CASE WHEN role = 'admin' THEN 'local' ELSE 'github' END,
-                    api_key,
-                    avatar_url,
-                    COALESCE(access_token, ''),
-                    session_token_hash,
-                    COALESCE(is_disabled, 0),
-                    last_login_at,
-                    created_at
-                FROM users
-                """
-            )
-        )
-        sync_conn.execute(text("DROP TABLE users"))
-        sync_conn.execute(text("ALTER TABLE users_new RENAME TO users"))
-        sync_conn.execute(text("PRAGMA foreign_keys=ON"))
-        return
+    timestamp_type = "TIMESTAMPTZ"
 
     additions: list[tuple[str, str]] = []
 
@@ -141,10 +85,7 @@ def sync_users_table_schema(sync_conn) -> None:
     sync_conn.execute(text("UPDATE users SET password_hash = NULL WHERE role != 'admin'"))
 
     if any(name == "is_disabled" for name, _ in additions):
-        if dialect == "sqlite":
-            sync_conn.execute(text("UPDATE users SET is_disabled=0 WHERE is_disabled IS NULL"))
-        else:
-            sync_conn.execute(text("UPDATE users SET is_disabled=FALSE WHERE is_disabled IS NULL"))
+        sync_conn.execute(text("UPDATE users SET is_disabled=FALSE WHERE is_disabled IS NULL"))
 
 
 async def _upgrade_users_schema(conn: AsyncConnection) -> None:
@@ -168,10 +109,9 @@ async def _upgrade_indexes(conn: AsyncConnection) -> None:
         await conn.execute(text(statement))
 
 
-async def _upgrade_neon_compat_tables(conn: AsyncConnection) -> None:
-    dialect = conn.dialect.name
-    bool_type = "BOOLEAN" if dialect != "sqlite" else "BOOLEAN"
-    timestamp_type = "TIMESTAMPTZ" if dialect != "sqlite" else "TIMESTAMP"
+async def _upgrade_postgres_compat_tables(conn: AsyncConnection) -> None:
+    bool_type = "BOOLEAN"
+    timestamp_type = "TIMESTAMPTZ"
 
     await conn.execute(
         text(
@@ -556,51 +496,15 @@ def _enforce_user_identity_constraints_sync(sync_conn) -> None:
         )
     )
 
-    dialect = sync_conn.dialect.name
-    supports_expression_index = dialect == "postgresql"
-    if dialect == "sqlite":
-        try:
-            version_raw = str(sync_conn.execute(text("SELECT sqlite_version()")).scalar() or "0.0.0")
-            parts = version_raw.split(".")
-            major = int(parts[0]) if len(parts) > 0 else 0
-            minor = int(parts[1]) if len(parts) > 1 else 0
-            patch = int(parts[2]) if len(parts) > 2 else 0
-            supports_expression_index = (major, minor, patch) >= (3, 9, 0)
-        except Exception:
-            supports_expression_index = False
-
-    if supports_expression_index:
-        sync_conn.execute(
-            text(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_ci_nonnull
-                ON users (LOWER(email))
-                WHERE email IS NOT NULL
-                """
-            )
+    sync_conn.execute(
+        text(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_ci_nonnull
+            ON users (LOWER(email))
+            WHERE email IS NOT NULL
+            """
         )
-    else:
-        has_plain_email_unique = False
-        for constraint in inspector.get_unique_constraints("users"):
-            cols = constraint.get("column_names") or []
-            if cols == ["email"]:
-                has_plain_email_unique = True
-                break
-        if not has_plain_email_unique:
-            for index in inspector.get_indexes("users"):
-                if index.get("unique") and (index.get("column_names") or []) == ["email"]:
-                    has_plain_email_unique = True
-                    break
-        if not has_plain_email_unique:
-            sync_conn.execute(
-                text(
-                    """
-                    CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_nonnull
-                    ON users (email)
-                    WHERE email IS NOT NULL
-                    """
-                )
-            )
+    )
 
 
 async def _upgrade_users_identity_integrity(conn: AsyncConnection) -> None:
@@ -612,7 +516,7 @@ MIGRATIONS: list[Migration] = [
     Migration(name="0001_users_schema_sync", upgrade=_upgrade_users_schema),
     Migration(name="0002_indexes", upgrade=_upgrade_indexes),
     Migration(name="0003_auth_provider_split", upgrade=_upgrade_users_schema),
-    Migration(name="0004_neon_compat_tables", upgrade=_upgrade_neon_compat_tables),
+    Migration(name="0004_postgres_compat_tables", upgrade=_upgrade_postgres_compat_tables),
     Migration(name="0005_users_identity_integrity", upgrade=_upgrade_users_identity_integrity),
 ]
 

@@ -10,26 +10,20 @@ logger = logging.getLogger("prguard")
 
 # ── Index repo worker ─────────────────────────────────────────────────────────
 
-def run_index_repo(repo: str, token: str = None, token_ref: str = None) -> dict:
+async def run_index_repo(repo: str, token: str = None, token_ref: str = None) -> dict:
     """
-    Background worker function for indexing a repo.
-    Runs in a separate RQ worker process.
+    Inline request-time function for indexing a repo.
 
     Flow:
     1. Fetch all files from GitHub
-    2. Chunk + embed + store in ChromaDB
+    2. Chunk + embed + store in PostgreSQL pgvector
     3. Return stats
     """
     try:
-        if token is None:
-            from app.services.queue import resolve_secret_ref
-            token = resolve_secret_ref(token_ref)
         if not token:
             raise ValueError("Missing indexing token")
         # fetch all files from GitHub
-        files = asyncio.run(
-            fetch_all_files(repo=repo, token=token)
-        )
+        files = await fetch_all_files(repo=repo, token=token)
 
         if not files:
             return {
@@ -39,10 +33,8 @@ def run_index_repo(repo: str, token: str = None, token_ref: str = None) -> dict:
                 "indexed": False,
             }
 
-        # index into ChromaDB
-        stats = asyncio.run(
-            index_repo(repo=repo, files=files)
-        )
+        # index into PostgreSQL pgvector
+        stats = await index_repo(repo=repo, files=files)
 
         return {
             "status":  "completed",
@@ -63,7 +55,7 @@ def run_index_repo(repo: str, token: str = None, token_ref: str = None) -> dict:
 
 # ── PR review worker ──────────────────────────────────────────────────────────
 
-def run_pr_review(
+async def run_pr_review(
     repo:      str,
     pr_number: int,
     token:     str = None,
@@ -73,35 +65,22 @@ def run_pr_review(
     api_key_ref: str = None,
 ) -> dict:
     """
-    Background worker function for reviewing a PR.
-    Runs in a separate RQ worker process.
+    Inline request-time function for reviewing a PR.
 
     Flow:
     1. Fetch PR diff from GitHub
     2. Parse diff into changed files + lines
-    3. Retrieve relevant chunks from ChromaDB
+    3. Retrieve relevant chunks from PostgreSQL pgvector
     4. Send diff + chunks to LLM for review
     5. Post review comment back to GitHub PR
     """
     try:
         from app.services.github import fetch_pr_diff, post_pr_comment
-        from app.services.queue import resolve_secret_ref
-
-        if not token:
-            token = resolve_secret_ref(token_ref)
-        if not api_key:
-            api_key = resolve_secret_ref(api_key_ref)
         if not token or not api_key:
             return {"status": "failed", "error": "Missing token or API key"}
 
         # fetch the PR diff
-        diff_text = asyncio.run(
-            fetch_pr_diff(
-                repo=repo,
-                pr_number=pr_number,
-                token=token,
-            )
-        )
+        diff_text = await fetch_pr_diff(repo=repo, pr_number=pr_number, token=token)
 
         if not diff_text:
             return {
@@ -155,15 +134,13 @@ def run_pr_review(
         )
 
         # generate review using LLM + RAG
-        result = asyncio.run(
-            generate(
-                question=question,
-                repo=repo,
-                history=[],
-                provider=provider,
-                api_key=api_key,
-                n_chunks=6,
-            )
+        result = await generate(
+            question=question,
+            repo=repo,
+            history=[],
+            provider=provider,
+            api_key=api_key,
+            n_chunks=6,
         )
 
         # post review comment to GitHub PR
@@ -174,14 +151,7 @@ def run_pr_review(
             f"*Reviewed by PRGuard using {provider}*"
         )
 
-        asyncio.run(
-            post_pr_comment(
-                repo=repo,
-                pr_number=pr_number,
-                body=comment_body,
-                token=token,
-            )
-        )
+        await post_pr_comment(repo=repo, pr_number=pr_number, body=comment_body, token=token)
 
         return {
             "status":   "completed",

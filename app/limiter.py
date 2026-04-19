@@ -4,7 +4,7 @@ from collections import defaultdict
 from fastapi import HTTPException, Request
 
 # ── Simple In-Memory Limiter ──────────────────────────────────────────────────
-# In production, use Redis. For now, this protects the dev environment.
+# In the free-tier deployment model, this stays in-memory for a single backend instance.
 
 class SimpleLimiter:
     def __init__(self, requests_per_minute: int = 10):

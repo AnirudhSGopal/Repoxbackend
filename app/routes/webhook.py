@@ -55,8 +55,7 @@ async def github_webhook(
     - A push is made to a branch
     - An issue is created
 
-    CRITICAL: Must respond in under 200ms.
-    Heavy work is queued to background worker.
+    Work is executed inline so the app stays compatible with free-tier hosts.
     """
 
     # 1. read raw body first for signature check
@@ -103,7 +102,7 @@ async def github_webhook(
     elif x_github_event == "ping":
         return {"status": "pong", "message": "Webhook connected successfully"}
 
-    # 7. respond instantly — heavy work is queued
+    # 7. respond with the processed event summary
     return {
         "status":  "accepted",
         "event":   x_github_event,
@@ -147,7 +146,7 @@ async def _handle_pull_request(
         return
 
     # queue the PR review — this is the heavy work
-    job_id = enqueue_pr_review(
+    job_id = await enqueue_pr_review(
         repo=repo,
         pr_number=pr_number,
         token=token,
@@ -188,7 +187,7 @@ async def _handle_push(
 
     # queue re-indexing
     from app.services.queue import enqueue_index_repo
-    job_id = enqueue_index_repo(repo=repo, token=token)
+    job_id = await enqueue_index_repo(repo=repo, token=token)
 
     logger.info(f"Push to {repo} - re-indexing queued job {job_id}")
 
@@ -287,7 +286,6 @@ def _get_default_api_key(provider: str) -> str | None:
 async def test_webhook():
     """
     Test endpoint to verify webhook route is working.
-    Visit: http://localhost:8000/webhook/github/test
     """
     return {
         "status":  "ok",
