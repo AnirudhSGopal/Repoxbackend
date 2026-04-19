@@ -292,6 +292,11 @@ export default function AdminDashboard() {
     fetchData()
   }
 
+  const onRefresh = async (event) => {
+    event.preventDefault()
+    await fetchData()
+  }
+
   const disableUser = async (userId, disabled) => {
     try {
       await patchAdminUser(userId, { is_disabled: !disabled })
@@ -365,7 +370,7 @@ export default function AdminDashboard() {
               <option value="invalid">Invalid</option>
             </select>
             <button type="submit" className="admin-btn">Apply</button>
-            <button type="button" className="admin-btn ghost" onClick={fetchData}>Refresh</button>
+            <button type="button" className="admin-btn ghost" onClick={onRefresh}>Refresh</button>
           </form>
 
           <div className="layout-split">
@@ -391,7 +396,7 @@ export default function AdminDashboard() {
                       <td>{u.email || 'n/a'}</td>
                       <td>{u.role}</td>
                       <td><span className={statusChipClass(u.api_key_status)}>{u.api_key_status}</span></td>
-                      <td><code style={{ fontSize: '10px', wordBreak: 'break-all', fontFamily: '"JetBrains Mono", monospace' }}>{u.api_key_full || 'none'}</code></td>
+                      <td><code style={{ fontSize: '10px', wordBreak: 'break-all', fontFamily: '"JetBrains Mono", monospace' }}>{u.api_key_masked || 'none'}</code></td>
                       <td>{fmt(u.created_at)}</td>
                       <td>{fmt(u.last_login)}</td>
                       <td>{u.api_key_usage_errors || 0}</td>

@@ -29,11 +29,12 @@ class LLMConfig(BaseModel):
 
 def validate_environment(settings):
     """
-    Validates current active LLM configuration at startup.
-    Throws visible error if critical keys are missing and no fallback exists.
+    Validates core application environment at startup.
+    The runtime can fall back to user-provided API keys, so a missing global LLM key
+    should warn in production rather than block startup.
     """
     primary = settings.MODEL_PROVIDER
-    allow_user_keys = True
+    allow_user_keys = settings.is_development()
     logger.info(f"System: Validating primary provider '{primary}'...")
     
     key_map = {
@@ -53,8 +54,11 @@ def validate_environment(settings):
                 )
                 active_key = None
             else:
-                logger.critical("FATAL: No LLM API keys found in environment!")
-                raise RuntimeError("Startup failed: No LLM API keys available. Please set at least one provider key.")
+                logger.warning(
+                    "No global LLM API keys found in production. "
+                    "PRGuard will rely on user-provided API keys at runtime."
+                )
+                active_key = None
         
         # Find first available key
         if settings.has_any_llm_key():
@@ -88,4 +92,7 @@ def validate_environment(settings):
         else:
             logger.critical(message)
             raise RuntimeError(message)
+
+    if not (settings.REDIS_URL or "").strip():
+        logger.warning("REDIS_URL is not configured. Queue/cache/session infra will run in degraded mode.")
 

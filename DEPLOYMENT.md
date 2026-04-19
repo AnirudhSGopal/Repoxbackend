@@ -3,7 +3,7 @@
 ## Architecture
 - Frontend: Vercel (Vite static app)
 - Backend: Render or Railway (FastAPI)
-- Database: PostgreSQL
+- Database: Neon PostgreSQL
 - Cache/Queue: Redis
 
 ## Required Backend Environment Variables
@@ -13,8 +13,8 @@
 - FRONTEND_URL=https://<your-frontend-domain>
 - CORS_ORIGINS=https://<your-frontend-domain>
 - SECRET_KEY=<long-random-secret>
-- DATABASE_URL=postgresql://<user>:<password>@<your-neon-pooler-host>/<db>?sslmode=require&channel_binding=require
-- REDIS_URL=redis://:<password>@<host>:<port>
+- DATABASE_URL=postgresql+asyncpg://<user>:<password>@<your-neon-pooler-host>/<db>?sslmode=require&channel_binding=require
+- REDIS_URL=redis://:<password>@<your-redis-host>:6379/0
 - GITHUB_CLIENT_ID=<github-oauth-client-id>
 - GITHUB_CLIENT_SECRET=<github-oauth-client-secret>
 - GITHUB_WEBHOOK_SECRET=<github-webhook-secret>
@@ -51,7 +51,7 @@
 2. Set Root Directory to backend.
 3. Start command: python run.py
 4. Add all backend env vars listed above. DATABASE_URL is mandatory and startup fails if it is missing.
-5. Attach managed PostgreSQL and Redis.
+5. Attach Neon PostgreSQL and Redis.
 6. Deploy and confirm https://<backend>/health returns status ok.
 
 ## Vercel/Render Notes

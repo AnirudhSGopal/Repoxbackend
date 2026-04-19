@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getMe } from '../api/client'
+import { broadcastAuthChanged, getMe } from '../api/client'
 
 export default function Callback() {
   const navigate = useNavigate()
@@ -49,6 +49,7 @@ export default function Callback() {
         }
 
         setStatus('Login successful! Redirecting...')
+        broadcastAuthChanged('logged_in')
         timerId = setTimeout(() => navigate('/dashboard', { replace: true }), 600)
       } catch {
         if (!active) return

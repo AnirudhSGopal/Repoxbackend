@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { getMe, getUserProfile, logout as apiLogout } from '../api/client'
+import { broadcastAuthChanged, getMe, getUserProfile, logout as apiLogout } from '../api/client'
 
 const isSafeRedirect = (candidate, fallback) => {
   if (typeof candidate !== 'string' || !candidate.trim()) return fallback
@@ -37,6 +37,7 @@ export const useAuth = () => {
             setProfile(null)
           }
           localStorage.setItem('prguard_user_login', data.login)
+          broadcastAuthChanged('logged_in')
         } else {
           setIsAuthenticated(false)
           setUser(null)
@@ -62,6 +63,7 @@ export const useAuth = () => {
       setProfile(null)
       setLoading(false)
       localStorage.removeItem('prguard_user_login')
+      broadcastAuthChanged('expired')
     }
     window.addEventListener('auth:expired', handleExpiry)
     return () => window.removeEventListener('auth:expired', handleExpiry)
@@ -83,6 +85,7 @@ export const useAuth = () => {
       localStorage.removeItem('prguard_pinned')
       localStorage.removeItem('prguard_hidden')
       sessionStorage.clear()
+      broadcastAuthChanged('logged_out')
       window.location.href = redirectTarget
     }
   }

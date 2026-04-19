@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import { getAdminMe, getMe } from '../api/client'
+import {
+  AUTH_BROADCAST_STORAGE_KEY,
+  AUTH_CHANGED_EVENT,
+  getAdminMe,
+  getMe,
+} from '../api/client'
 
 export const useSession = () => {
   const [loading, setLoading] = useState(true)
@@ -45,11 +50,26 @@ export const useSession = () => {
       setLoading(false)
     }
 
+    const handleAuthChanged = () => {
+      if (!active) return
+      loadSession()
+    }
+
+    const handleStorage = (event) => {
+      if (!active) return
+      if (event.key !== AUTH_BROADCAST_STORAGE_KEY) return
+      loadSession()
+    }
+
     window.addEventListener('auth:expired', handleExpiry)
+    window.addEventListener(AUTH_CHANGED_EVENT, handleAuthChanged)
+    window.addEventListener('storage', handleStorage)
 
     return () => {
       active = false
       window.removeEventListener('auth:expired', handleExpiry)
+      window.removeEventListener(AUTH_CHANGED_EVENT, handleAuthChanged)
+      window.removeEventListener('storage', handleStorage)
     }
   }, [])
 

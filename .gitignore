@@ -15,14 +15,20 @@ backend/.env
 frontend/.env
 *.pem
 
+# ── Frontend-specific environment files ────────────────────────────────────────
+# These are local development files that contain dev URLs and should never be
+# committed to version control. They get baked into Vite builds.
+frontend/.env.local
+frontend/.env.*.local
+frontend/.env.production.local
+frontend/.env.development.local
+
 # ── IDE ───────────────────────────────────────────────────────────────────────
 .VSCodeCounter/
 .vscode/
 .idea/
 
 # ── Database & Cache ──────────────────────────────────────────────────────────
-backend/chroma_db/
-*.sqlite3
 *.db
 
 # ── Logs & Debug ──────────────────────────────────────────────────────────────
@@ -43,3 +49,10 @@ backend/list_models.py
 backend/*_models.json
 backend/*_models.txt
 frontend/log.txt
+
+# Generated vector store artifacts
+backend/chroma_db/
+*.sqlite3
+*.bin
+*.pickle
+

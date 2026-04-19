@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { adminLogout, getAdminMe } from '../api/client'
+import { adminLogout, broadcastAuthChanged, getAdminMe } from '../api/client'
 
 const isSafeRedirect = (candidate, fallback) => {
   if (typeof candidate !== 'string' || !candidate.trim()) return fallback
@@ -29,6 +29,7 @@ export const useAdminAuth = () => {
         setAdminUser(data)
         setIsAdminAuthenticated(true)
         localStorage.setItem('prguard_admin_login', data.username || data.email || 'admin')
+        broadcastAuthChanged('logged_in')
       } else {
         setAdminUser(null)
         setIsAdminAuthenticated(false)
@@ -58,6 +59,7 @@ export const useAdminAuth = () => {
       setAdminUser(null)
       setIsAdminAuthenticated(false)
       localStorage.removeItem('prguard_admin_login')
+      broadcastAuthChanged('logged_out')
       window.location.href = redirectTarget
     }
   }

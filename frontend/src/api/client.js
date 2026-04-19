@@ -1,19 +1,19 @@
 import axios from 'axios'
 
 // In production, set VITE_API_BASE_URL (for example: https://api.yourdomain.com).
-// In development, keep it empty to use the Vite proxy.
 const ENV_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim()
-const DEV_PROXY_TARGET = (import.meta.env.VITE_API_PROXY_TARGET || '').trim()
 const IS_BROWSER = typeof window !== 'undefined'
-const DERIVED_LOCAL_API_ORIGIN =
-  IS_BROWSER &&
-  !ENV_BASE_URL &&
-  !DEV_PROXY_TARGET &&
-  /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname)
-    ? `${window.location.protocol}//${window.location.hostname}:8000`
-    : ''
 
-const BASE_URL = (ENV_BASE_URL || DEV_PROXY_TARGET || DERIVED_LOCAL_API_ORIGIN || '').replace(/\/$/, '')
+const BASE_URL = ENV_BASE_URL.replace(/\/$/, '')
+export const AUTH_BROADCAST_STORAGE_KEY = 'prguard_auth_event'
+export const AUTH_CHANGED_EVENT = 'auth:changed'
+
+export const broadcastAuthChanged = (state = 'changed') => {
+  if (!IS_BROWSER) return
+  const payload = JSON.stringify({ state, ts: Date.now() })
+  localStorage.setItem(AUTH_BROADCAST_STORAGE_KEY, payload)
+  window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT, { detail: { state } }))
+}
 
 const client = axios.create({
   baseURL:         BASE_URL,
@@ -284,8 +284,10 @@ export const getMe = async () => {
 export const logout = async () => {
   try {
     const res = await client.post('/auth/logout')
+    broadcastAuthChanged('logged_out')
     return res.data || { redirect: '/login', role: 'user' }
   } catch {
+    broadcastAuthChanged('logged_out')
     return { redirect: '/login', role: 'user' }
   }
 }
@@ -296,6 +298,7 @@ export const adminLogin = async (identifier, password) => {
     password,
   }
   const res = await client.post('/admin/login', body)
+  broadcastAuthChanged('logged_in')
   return res.data
 }
 
@@ -308,8 +311,10 @@ export const getGithubLoginUrl = () => {
 export const adminLogout = async () => {
   try {
     const res = await client.post('/admin/logout')
+    broadcastAuthChanged('logged_out')
     return res.data || { redirect: '/', role: 'admin' }
   } catch {
+    broadcastAuthChanged('logged_out')
     return { redirect: '/', role: 'admin' }
   }
 }

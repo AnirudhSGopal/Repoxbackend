@@ -6,7 +6,6 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
-from sqlalchemy.pool import NullPool
 
 from app.config import settings
 from app.services.db_migrations import apply_pending_migrations
@@ -22,32 +21,16 @@ def _build_engine():
     engine_kwargs: dict[str, object] = {
         "echo": settings.is_development(),
         "pool_pre_ping": True,
-    }
-
-    if database_url.startswith("sqlite"):
-        engine_kwargs["connect_args"] = {"check_same_thread": False}
-        engine_kwargs["poolclass"] = NullPool
-    else:
-        is_neon = "neon.tech" in database_url.lower()
-        connect_args: dict[str, object] = {
+        "pool_size": max(int(settings.DB_POOL_SIZE), 1),
+        "max_overflow": max(int(settings.DB_MAX_OVERFLOW), 0),
+        "pool_timeout": max(int(settings.DB_POOL_TIMEOUT), 1),
+        "pool_recycle": max(int(settings.DB_POOL_RECYCLE), 0),
+        "pool_use_lifo": True,
+        "connect_args": {
             "timeout": max(int(settings.DB_CONNECT_TIMEOUT), 1),
             "command_timeout": max(int(settings.DB_CONNECT_TIMEOUT), 1),
-        }
-
-        if is_neon:
-            # Neon pooler works best with asyncpg statement cache disabled.
-            connect_args["statement_cache_size"] = 0
-
-        engine_kwargs.update(
-            {
-                "pool_size": max(int(settings.DB_POOL_SIZE), 1),
-                "max_overflow": max(int(settings.DB_MAX_OVERFLOW), 0),
-                "pool_timeout": max(int(settings.DB_POOL_TIMEOUT), 1),
-                "pool_recycle": max(int(settings.DB_POOL_RECYCLE), 0),
-                "pool_use_lifo": True,
-                "connect_args": connect_args,
-            }
-        )
+        },
+    }
 
     return create_async_engine(database_url, **engine_kwargs)
 
@@ -106,5 +89,8 @@ async def verify_database_connection() -> None:
 async def init_db():
     await verify_database_connection()
     async with engine.begin() as conn:
+        # Enable vector extension only on PostgreSQL-compatible backends.
+        if conn.dialect.name in {"postgresql", "postgres"}:
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         await apply_pending_migrations(conn)

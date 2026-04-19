@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.models.base import AsyncSessionLocal
 from app.services.admin_bootstrap import ensure_default_admin
 from app.models.base import ping_database
+from app.services.redis_client import ping_redis, warm_redis_connection
 
 app.add_middleware(BaseHTTPMiddleware, dispatch=log_request_middleware)
 app.add_middleware(GlobalHardenMiddleware)
@@ -27,12 +28,9 @@ allow_origins = settings.cors_origins()
 cors_kwargs = {
     "allow_origins": allow_origins,
     "allow_credentials": True,
-    "allow_methods": ["*"],
-    "allow_headers": ["*"],
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 }
-
-if settings.is_development():
-    cors_kwargs["allow_origin_regex"] = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
 
 app.add_middleware(CORSMiddleware, **cors_kwargs)
 
@@ -85,13 +83,17 @@ async def startup():
             await ensure_default_admin(db)
         print("[STARTUP] Admin bootstrap complete.")
 
-        # 4. Optionally pre-load RAG dependencies
+        # 4. Warm Redis connection for cache/queue/session infrastructure.
+        await warm_redis_connection()
+        print("[STARTUP] Redis bootstrap complete.")
+
+        # 5. Optionally pre-load RAG dependencies
         if settings.PRELOAD_RAG_ON_STARTUP:
             print("[STARTUP] Pre-loading RAG dependencies...")
             try:
-                from app.services.rag import _get_embedding_model, _get_chroma_client
+                from app.services.rag import _get_embedding_model, ensure_vector_store
 
-                _get_chroma_client()  # Initialize ChromaDB client
+                await ensure_vector_store()  # Ensure pgvector table/indexes exist
                 _get_embedding_model()  # Load embedding model
                 print("[STARTUP] RAG dependencies loaded successfully.")
             except Exception as e:
@@ -118,6 +120,8 @@ async def health(response: Response):
     llm_key_configured = settings.has_any_llm_key()
     database_connected = False
     database_error = None
+    redis_connected = False
+    redis_error = None
 
     try:
         await ping_database()
@@ -126,13 +130,20 @@ async def health(response: Response):
         database_error = str(exc)
         response.status_code = 503
 
+    redis_connected, redis_error = await ping_redis()
+    if not redis_connected and database_connected:
+        response.status_code = 503
+
     return {
-        "status": "ok" if database_connected else "degraded",
+        "status": "ok" if (database_connected and redis_connected) else "degraded",
         "service": "PRGuard",
         "database_url_configured": required_env_loaded,
         "database_connected": database_connected,
         "database_target": settings.database_host_summary(),
         "database_error": database_error,
+        "redis_connected": redis_connected,
+        "redis_configured": bool((settings.REDIS_URL or "").strip()),
+        "redis_error": redis_error,
         "llm_key_configured": llm_key_configured,
         "env_loaded": required_env_loaded,
     }

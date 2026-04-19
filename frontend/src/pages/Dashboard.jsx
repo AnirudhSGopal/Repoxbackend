@@ -443,7 +443,7 @@ export default function Dashboard() {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: mutedText }}>{providerLabel}</span>
           <span style={{ color: dark ? '#1e2530' : '#ccc' }}>·</span>
-          <span style={{ color: mutedText }}>ChromaDB</span>
+          <span style={{ color: mutedText }}>Vector store</span>
           <span style={{ color: dark ? '#1e2530' : '#ccc' }}>·</span>
 
           <div style={{ position: 'relative' }}>

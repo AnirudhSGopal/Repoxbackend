@@ -5,3 +5,4 @@ from app.models.chat import Session, Message
 from app.models.review import Review
 from app.models.webhook import WebhookEvent
 from app.models.api_key import UserApiKey
+from app.models.vector_chunk import CodeChunk
