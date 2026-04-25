@@ -19,6 +19,7 @@ frontend/.env
 # These are local development files that contain dev URLs and should never be
 # committed to version control. They get baked into Vite builds.
 frontend/.env.local
+frontend/.env.production
 frontend/.env.*.local
 frontend/.env.production.local
 frontend/.env.development.local
