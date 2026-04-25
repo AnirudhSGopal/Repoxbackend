@@ -4,6 +4,24 @@ from typing import Optional, Dict
 
 logger = logging.getLogger("prguard")
 
+
+def _is_placeholder(value: str) -> bool:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return True
+
+    placeholder_tokens = (
+        "<",
+        "your_",
+        "your-",
+        "replace",
+        "example.com",
+        "yourdomain.com",
+        "changeme",
+        "password",
+    )
+    return any(token in raw for token in placeholder_tokens)
+
 class LLMConfig(BaseModel):
     """
     Principal Architect's Unified Model Configuration.
@@ -78,12 +96,16 @@ def validate_environment(settings):
         missing_auth.append("GITHUB_CLIENT_ID")
     if not (settings.GITHUB_CLIENT_SECRET or "").strip():
         missing_auth.append("GITHUB_CLIENT_SECRET")
+    if not (settings.GITHUB_WEBHOOK_SECRET or "").strip():
+        missing_auth.append("GITHUB_WEBHOOK_SECRET")
     if not (settings.APP_URL or "").strip():
         missing_auth.append("APP_URL")
     if not (settings.FRONTEND_URL or "").strip():
         missing_auth.append("FRONTEND_URL")
     if not (settings.SECRET_KEY or "").strip():
         missing_auth.append("SECRET_KEY")
+    if not (settings.JWT_SECRET or "").strip():
+        missing_auth.append("JWT_SECRET")
 
     if missing_auth:
         message = f"Auth environment is incomplete. Missing: {', '.join(missing_auth)}"
@@ -91,6 +113,39 @@ def validate_environment(settings):
             logger.warning(message)
         else:
             logger.critical(message)
+            raise RuntimeError(message)
+
+    if not settings.is_development():
+        placeholder_fields = {
+            "DATABASE_URL": settings.DATABASE_URL,
+            "APP_URL": settings.APP_URL,
+            "FRONTEND_URL": settings.FRONTEND_URL,
+            "SECRET_KEY": settings.SECRET_KEY,
+            "JWT_SECRET": settings.JWT_SECRET,
+            "GITHUB_CLIENT_ID": settings.GITHUB_CLIENT_ID,
+            "GITHUB_CLIENT_SECRET": settings.GITHUB_CLIENT_SECRET,
+            "GITHUB_WEBHOOK_SECRET": settings.GITHUB_WEBHOOK_SECRET,
+        }
+        invalid = [name for name, val in placeholder_fields.items() if _is_placeholder(val)]
+        if invalid:
+            raise RuntimeError(
+                "Production environment has placeholder values for: "
+                + ", ".join(invalid)
+            )
+
+        for field_name in ("APP_URL", "FRONTEND_URL"):
+            current = (getattr(settings, field_name, "") or "").strip().lower()
+            if "localhost" in current or "127.0.0.1" in current:
+                raise RuntimeError(f"{field_name} cannot target localhost in production.")
+
+    if not settings.has_any_llm_key():
+        message = (
+            "At least one LLM API key is required via OPENAI_API_KEY, ANTHROPIC_API_KEY, "
+            "GEMINI_API_KEY, or LLM_API_KEY."
+        )
+        if settings.is_development():
+            logger.warning(message)
+        else:
             raise RuntimeError(message)
 
     if not (settings.REDIS_URL or "").strip():

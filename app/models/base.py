@@ -6,6 +6,7 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import settings
 from app.services.db_migrations import apply_pending_migrations
@@ -18,19 +19,40 @@ def _build_engine():
     if not database_url:
         raise RuntimeError("DATABASE_URL must be set before the backend starts.")
 
-    engine_kwargs: dict[str, object] = {
-        "echo": settings.is_development(),
-        "pool_pre_ping": True,
-        "pool_size": max(int(settings.DB_POOL_SIZE), 1),
-        "max_overflow": max(int(settings.DB_MAX_OVERFLOW), 0),
-        "pool_timeout": max(int(settings.DB_POOL_TIMEOUT), 1),
-        "pool_recycle": max(int(settings.DB_POOL_RECYCLE), 0),
-        "pool_use_lifo": True,
-        "connect_args": {
-            "timeout": max(int(settings.DB_CONNECT_TIMEOUT), 1),
-            "command_timeout": max(int(settings.DB_CONNECT_TIMEOUT), 1),
-        },
-    }
+    is_sqlite = database_url.startswith("sqlite")
+    connect_timeout = max(int(settings.DB_CONNECT_TIMEOUT), 1)
+
+    engine_kwargs: dict[str, object] = {"echo": settings.is_development()}
+    if is_sqlite:
+        engine_kwargs["poolclass"] = NullPool
+        engine_kwargs["connect_args"] = {
+            "timeout": connect_timeout,
+            "check_same_thread": False,
+        }
+    else:
+        lowered_url = database_url.lower()
+        uses_pgbouncer_pooler = ".pooler." in lowered_url or "pgbouncer" in lowered_url
+
+        connect_args: dict[str, object] = {
+            "timeout": connect_timeout,
+            "command_timeout": connect_timeout,
+        }
+        if uses_pgbouncer_pooler:
+            # PgBouncer transaction/statement pooling is incompatible with asyncpg
+            # prepared statement caching unless statement cache is disabled.
+            connect_args["statement_cache_size"] = 0
+
+        engine_kwargs.update(
+            {
+                "pool_pre_ping": True,
+                "pool_size": max(int(settings.DB_POOL_SIZE), 1),
+                "max_overflow": max(int(settings.DB_MAX_OVERFLOW), 0),
+                "pool_timeout": max(int(settings.DB_POOL_TIMEOUT), 1),
+                "pool_recycle": max(int(settings.DB_POOL_RECYCLE), 0),
+                "pool_use_lifo": True,
+                "connect_args": connect_args,
+            }
+        )
 
     return create_async_engine(database_url, **engine_kwargs)
 

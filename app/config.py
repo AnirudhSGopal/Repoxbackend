@@ -1,9 +1,27 @@
 from pydantic import ConfigDict, field_validator, model_validator
 from pydantic_settings import BaseSettings
+from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+BACKEND_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
 class Settings(BaseSettings):
-    model_config = ConfigDict(extra="ignore", env_file=(".env", "../.env"))
+    model_config = ConfigDict(
+        extra="ignore",
+        env_file=(str(BACKEND_ENV_FILE),),
+        env_ignore_empty=True,
+    )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        return (init_settings, dotenv_settings, file_secret_settings)
 
     GITHUB_APP_ID: str = ""
     GITHUB_PRIVATE_KEY: str = ""
@@ -16,7 +34,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     LLM_API_KEY: str = ""
 
-    REDIS_URL: str = "redis://localhost:6379"
+    REDIS_URL: str = ""
 
     LANGCHAIN_API_KEY: str = ""
     LANGCHAIN_PROJECT: str = "prguard"
@@ -74,12 +92,39 @@ class Settings(BaseSettings):
     def has_any_llm_key(self) -> bool:
         return any([self.ANTHROPIC_API_KEY, self.OPENAI_API_KEY, self.GEMINI_API_KEY, self.LLM_API_KEY])
 
+    @staticmethod
+    def _is_placeholder(value: str) -> bool:
+        raw = (value or "").strip().lower()
+        if not raw:
+            return True
+
+        placeholder_tokens = (
+            "<",
+            "your_",
+            "your-",
+            "replace",
+            "example.com",
+            "yourdomain.com",
+            "changeme",
+            "password",
+        )
+        return any(token in raw for token in placeholder_tokens)
+
     @model_validator(mode="after")
     def validate_database_configuration(self):
         database_url = self.normalize_database_url((self.DATABASE_URL or "").strip())
         if not database_url:
-            raise ValueError("DATABASE_URL must be set in the environment.")
+            if self.is_development():
+                database_url = "sqlite+aiosqlite:///./prguard.db"
+            else:
+                raise ValueError("DATABASE_URL must be set in the environment.")
         self.DATABASE_URL = database_url
+
+        if self.is_development():
+            if not (self.APP_URL or "").strip():
+                self.APP_URL = "http://localhost:8000"
+            if not (self.FRONTEND_URL or "").strip():
+                self.FRONTEND_URL = "http://localhost:5173"
 
         # Compatibility fallback: if API_BASE_URL is omitted, reuse APP_URL.
         if not (self.API_BASE_URL or "").strip() and (self.APP_URL or "").strip():
@@ -103,6 +148,49 @@ class Settings(BaseSettings):
                 if raw_value and not raw_value.lower().startswith("https://"):
                     raise ValueError(f"{field_name} must use HTTPS in non-development environments.")
 
+            required_fields = {
+                "APP_URL": self.APP_URL,
+                "FRONTEND_URL": self.FRONTEND_URL,
+                "SECRET_KEY": self.SECRET_KEY,
+                "JWT_SECRET": self.JWT_SECRET,
+                "GITHUB_CLIENT_ID": self.GITHUB_CLIENT_ID,
+                "GITHUB_CLIENT_SECRET": self.GITHUB_CLIENT_SECRET,
+                "GITHUB_WEBHOOK_SECRET": self.GITHUB_WEBHOOK_SECRET,
+            }
+
+            missing = [name for name, val in required_fields.items() if not (val or "").strip()]
+            if missing:
+                raise ValueError(
+                    f"Missing required production environment variables: {', '.join(missing)}"
+                )
+
+            placeholder = [name for name, val in required_fields.items() if self._is_placeholder(val)]
+            if placeholder:
+                raise ValueError(
+                    f"Placeholder values are not allowed for production environment variables: {', '.join(placeholder)}"
+                )
+
+            if self._is_placeholder(self.DATABASE_URL):
+                raise ValueError("DATABASE_URL contains placeholder values and is not deployment-ready.")
+
+            if not any(
+                [
+                    (self.OPENAI_API_KEY or "").strip(),
+                    (self.ANTHROPIC_API_KEY or "").strip(),
+                    (self.GEMINI_API_KEY or "").strip(),
+                    (self.LLM_API_KEY or "").strip(),
+                ]
+            ):
+                raise ValueError(
+                    "At least one LLM API key must be configured in production "
+                    "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or LLM_API_KEY)."
+                )
+
+            for url_field in ("APP_URL", "FRONTEND_URL", "API_BASE_URL"):
+                url_value = (getattr(self, url_field, "") or "").strip().lower()
+                if "localhost" in url_value or "127.0.0.1" in url_value:
+                    raise ValueError(f"{url_field} cannot point to localhost in production.")
+
         return self
 
     def normalize_database_url(self, database_url: str) -> str:
@@ -115,6 +203,8 @@ class Settings(BaseSettings):
 
         parsed = urlsplit(value)
         scheme = parsed.scheme
+        if scheme.startswith("sqlite"):
+            return value
         if scheme in {"postgresql", "postgres"}:
             scheme = "postgresql+asyncpg"
         elif scheme == "postgresql+psycopg2":
@@ -163,6 +253,8 @@ class Settings(BaseSettings):
             return "<missing>"
 
         parsed = urlsplit(value)
+        if parsed.scheme.startswith("sqlite"):
+            return value
         host = parsed.hostname or ""
         port = f":{parsed.port}" if parsed.port else ""
         username = f"{parsed.username}@" if parsed.username else ""
@@ -225,6 +317,10 @@ class Settings(BaseSettings):
         if admin_email and email_normalized and admin_email == email_normalized:
             return True
         return False
+
+    @property
+    def env_file_loaded(self) -> str:
+        return str(BACKEND_ENV_FILE)
 
 settings = Settings()
 if not (settings.SECRET_KEY or "").strip():
