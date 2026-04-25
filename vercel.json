@@ -1,5 +1,14 @@
 {
   "buildCommand": "cd frontend && npm run build",
   "outputDirectory": "frontend/dist",
-  "installCommand": "npm install --prefix frontend"
+  "installCommand": "npm install --prefix frontend",
+  "functions": {
+    "api/**/*.py": {
+      "runtime": "python3.11"
+    }
+  },
+  "routes": [
+    { "src": "/(.*)", "dest": "frontend/dist/$1" },
+    { "src": "/api/(.*)", "dest": "/api/index.py" }
+  ]
 }
