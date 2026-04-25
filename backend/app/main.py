@@ -68,6 +68,11 @@ async def startup():
 
     try:
         print("[STARTUP] Starting PRGuard backend...")
+        print(f"[STARTUP] ENV FILE LOADED: {settings.env_file_loaded}")
+        print(
+            "[STARTUP] OPENAI_API_KEY PRESENT: "
+            f"{'TRUE' if bool((settings.OPENAI_API_KEY or '').strip()) else 'FALSE'}"
+        )
         # 1. Validate Core Application Environment
         print("[STARTUP] Validating environment...")
         validate_environment(settings)
@@ -131,11 +136,9 @@ async def health(response: Response):
         response.status_code = 503
 
     redis_connected, redis_error = await ping_redis()
-    if not redis_connected and database_connected:
-        response.status_code = 503
 
     return {
-        "status": "ok" if (database_connected and redis_connected) else "degraded",
+        "status": "ok" if database_connected else "degraded",
         "service": "PRGuard",
         "database_url_configured": required_env_loaded,
         "database_connected": database_connected,

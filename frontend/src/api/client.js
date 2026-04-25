@@ -1,10 +1,17 @@
 import axios from 'axios'
 
-// In production, set VITE_API_BASE_URL (for example: https://api.yourdomain.com).
-const ENV_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').trim()
+const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL
 const IS_BROWSER = typeof window !== 'undefined'
+const IS_DEV = Boolean(import.meta.env.DEV)
 
-const BASE_URL = ENV_BASE_URL.replace(/\/$/, '')
+if (typeof ENV_BASE_URL !== 'string' || !ENV_BASE_URL.trim()) {
+  throw new Error('VITE_API_BASE_URL is required at runtime and cannot be empty.')
+}
+
+const BASE_URL = ENV_BASE_URL.trim().replace(/\/$/, '')
+if (!IS_DEV && (BASE_URL.toLowerCase().includes('localhost') || BASE_URL.includes('127.0.0.1'))) {
+  throw new Error('VITE_API_BASE_URL cannot point to localhost/127.0.0.1.')
+}
 export const AUTH_BROADCAST_STORAGE_KEY = 'prguard_auth_event'
 export const AUTH_CHANGED_EVENT = 'auth:changed'
 

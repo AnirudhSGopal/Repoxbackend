@@ -1,45 +1,56 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'node:fs'
+import path from 'node:path'
 
 // https://vite.dev/config/
-export default defineConfig(({ command }) => {
-  const apiBaseUrl = (process.env.VITE_API_BASE_URL || '').trim()
+export default defineConfig(({ command, mode }) => {
+  const disallowedEnvFiles = [
+    '.env',
+    '.env.development',
+    '.env.production',
+    '.env.development.local',
+    '.env.production.local',
+  ]
+
+  const activeConflicts = disallowedEnvFiles.filter((fileName) =>
+    fs.existsSync(path.join(__dirname, fileName))
+  )
+
+  if (activeConflicts.length > 0) {
+    throw new Error(
+      `Only frontend/.env.local is allowed as an active frontend env source. Remove: ${activeConflicts.join(', ')}`
+    )
+  }
+
+  const env = loadEnv(mode, __dirname, 'VITE_')
+  const apiBaseUrlRaw = env.VITE_API_BASE_URL
+  const githubClientIdRaw = env.VITE_GITHUB_CLIENT_ID
+  const apiBaseUrl = typeof apiBaseUrlRaw === 'string' ? apiBaseUrlRaw.trim() : ''
+  const githubClientId = typeof githubClientIdRaw === 'string' ? githubClientIdRaw.trim() : ''
+
+  const isLocalhostTarget = (value) => {
+    const normalized = (value || '').toLowerCase()
+    return normalized.includes('localhost') || normalized.includes('127.0.0.1')
+  }
 
   if (command === 'build' && !apiBaseUrl) {
     throw new Error('VITE_API_BASE_URL is required for production builds.')
   }
 
+  if (command === 'build' && isLocalhostTarget(apiBaseUrl)) {
+    throw new Error('VITE_API_BASE_URL cannot point to localhost/127.0.0.1 for production builds.')
+  }
+
+  if (command === 'build' && !/^https?:\/\//i.test(apiBaseUrl)) {
+    throw new Error('VITE_API_BASE_URL must be an absolute URL (http:// or https://).')
+  }
+
+  if (command === 'build' && !githubClientId) {
+    throw new Error('VITE_GITHUB_CLIENT_ID is required for production builds.')
+  }
+
   return {
     plugins: [react()],
-    server: {
-      proxy: apiBaseUrl
-        ? {
-            '/auth': {
-              target: apiBaseUrl,
-              changeOrigin: true,
-            },
-            '/api': {
-              target: apiBaseUrl,
-              changeOrigin: true,
-            },
-            '/webhook': {
-              target: apiBaseUrl,
-              changeOrigin: true,
-            },
-            '/admin': {
-              target: apiBaseUrl,
-              changeOrigin: true,
-            },
-            '/user': {
-              target: apiBaseUrl,
-              changeOrigin: true,
-            },
-            '/health': {
-              target: apiBaseUrl,
-              changeOrigin: true,
-            },
-          }
-        : undefined,
-    },
   }
 })
